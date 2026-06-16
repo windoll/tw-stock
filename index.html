@@ -118,26 +118,35 @@ function save(){ localStorage.setItem(LS_KEY, JSON.stringify(watch)); }
 
 // 經 CORS proxy 抓 TWSE 即時報價（純前端無法直連 mis.twse）
 const PROXIES = [
-  u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u),
   u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
+  u => "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(u),
+  u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u),
 ];
+
+async function fetchVia(wrap, url, signal){
+  const r = await fetch(wrap(url), {cache:"no-store", signal});
+  if(!r.ok) throw new Error("HTTP "+r.status);
+  const data = await r.json();
+  if(!data || !data.msgArray) throw new Error("無資料");
+  return data.msgArray;
+}
 
 async function fetchQuotes(codes){
   if(!codes.length) return [];
   // 同時查上市與上櫃，存在者才會回傳
   const exch = codes.map(c => `tse_${c}.tw|otc_${c}.tw`).join("|");
   const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${exch}&json=1&delay=0&_=${Date.now()}`;
-  let lastErr;
-  for(const wrap of PROXIES){
-    try{
-      const r = await fetch(wrap(url), {cache:"no-store"});
-      if(!r.ok) throw new Error("HTTP "+r.status);
-      const data = await r.json();
-      if(data && data.msgArray) return data.msgArray;
-      throw new Error("無資料");
-    }catch(e){ lastErr = e; }
+  // 同時向所有 proxy 發出，誰先回來就用誰；8 秒逾時
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try{
+    return await Promise.any(PROXIES.map(w => fetchVia(w, url, ctrl.signal)));
+  }catch(e){
+    throw new Error("來源逾時或無回應");
+  }finally{
+    clearTimeout(timer);
+    ctrl.abort();   // 取消其餘較慢的請求
   }
-  throw lastErr || new Error("抓取失敗");
 }
 
 function num(v){ const n = parseFloat(v); return isNaN(n) ? null : n; }
