@@ -49,6 +49,17 @@
   .card .crow{display:flex;justify-content:space-between;align-items:center;font-size:15px;font-weight:700}
   .card .cdel{position:absolute;top:6px;right:8px;cursor:pointer;color:var(--sub);background:none;border:none;font-size:13px;opacity:.5}
   .card .cdel:hover{opacity:1}
+  .card .chold{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);font-size:13px;display:flex;justify-content:space-between}
+  .card .chold .lbl{color:var(--sub);font-weight:400}
+
+  /* 持股輸入與總計 */
+  .tablewrap{overflow-x:auto}
+  input.hold{width:74px;min-width:0;flex:none;padding:5px 6px;font-size:13px;text-align:right}
+  input.hold::-webkit-outer-spin-button,input.hold::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  .summary{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 14px;
+    margin-bottom:14px;font-size:14px;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+  .summary .lbl{color:var(--sub)}
+  .summary b{font-size:17px}
 </style>
 </head>
 <body>
@@ -63,6 +74,7 @@
         <option value="0">不自動</option>
       </select>
     </span>
+    <button id="refreshBtn" class="ghost">立即更新</button>
     <span class="toggle" id="viewToggle">
       <button data-view="table" class="on">表格</button>
       <button data-view="cards">卡片</button>
@@ -71,22 +83,26 @@
   </div>
 
   <div class="bar">
-    <input id="codeInput" placeholder="輸入股票代號，例：2330（上市）或 6488（上櫃）" autocomplete="off">
+    <input id="codeInput" placeholder="股票代號，例：2330（上市）/ 6488（上櫃）" autocomplete="off">
     <button id="addBtn">加入</button>
-    <button id="refreshBtn" class="ghost">立即更新</button>
   </div>
   <div class="err" id="err"></div>
 
+  <div class="summary hidden" id="summary"></div>
+
+  <div class="tablewrap">
   <table id="tableView">
     <thead>
       <tr>
         <th class="name">名稱</th>
         <th>成交</th><th>漲跌</th><th>幅度</th>
+        <th>股數</th><th>買價</th><th>損益</th><th>報酬率</th>
         <th>開</th><th>高</th><th>低</th><th>昨收</th><th>量</th><th></th>
       </tr>
     </thead>
     <tbody id="tbody"></tbody>
   </table>
+  </div>
   <div id="cards" class="hidden"></div>
   <div class="empty" id="empty">尚未加入任何股票，請於上方輸入代號。</div>
 
@@ -136,14 +152,24 @@ function fmt(n,d=2){ return n===null||n===undefined ? "—" : Number(n).toLocale
 
 let lastRows = [];   // 暫存最後一次抓到的資料，供切換檢視/排序後重繪
 
-function calc(m){
+function clsOf(v){ return v===null||v===0 ? "flat" : (v>0?"up":"down"); }
+function signOf(v){ return v>0?"▲":(v<0?"▼":""); }
+
+function calc(m, w){
   const price = pickPrice(m);
   const y = num(m.y);
   const diff = (price!==null && y!==null) ? price - y : null;
   const pct  = (diff!==null && y) ? diff / y * 100 : null;
-  const cls = diff===null||diff===0 ? "flat" : (diff>0 ? "up":"down");
-  const sign = diff>0 ? "▲":(diff<0?"▼":"");
-  return {price, y, diff, pct, cls, sign, vol:num(m.v)};
+  // 持股損益
+  const qty = w && num(w.qty), cost = w && num(w.cost);
+  let pl=null, plPct=null, hasHold=false;
+  if(qty && cost && price!==null){
+    hasHold = true;
+    pl = (price - cost) * qty;
+    plPct = (price - cost) / cost * 100;
+  }
+  return {price, y, diff, pct, cls:clsOf(diff), sign:signOf(diff),
+          vol:num(m.v), qty, cost, pl, plPct, hasHold};
 }
 
 function render(rows){
@@ -152,28 +178,73 @@ function render(rows){
   const byCode = {};
   lastRows.forEach(m => { byCode[m.c] = m; });
   if(view==="table") renderTable(byCode); else renderCards(byCode);
+  renderSummary(byCode);
+}
+
+function renderSummary(byCode){
+  const box = document.getElementById("summary");
+  let totalCost=0, totalVal=0, any=false;
+  watch.forEach(w => {
+    const m = byCode[w.code]; if(!m) return;
+    const d = calc(m, w);
+    if(d.hasHold){ any=true; totalCost += d.cost*d.qty; totalVal += d.price*d.qty; }
+  });
+  if(!any){ box.classList.add("hidden"); box.innerHTML=""; return; }
+  box.classList.remove("hidden");
+  const pl = totalVal - totalCost;
+  const plPct = totalCost ? pl/totalCost*100 : null;
+  const cls = clsOf(pl);
+  box.innerHTML = `
+    <span><span class="lbl">總成本</span> ${fmt(totalCost,0)}</span>
+    <span><span class="lbl">總市值</span> ${fmt(totalVal,0)}</span>
+    <span><span class="lbl">總損益</span> <b class="${cls}">${signOf(pl)} ${fmt(Math.abs(pl),0)}</b>
+      <span class="${cls}">(${plPct===null?"—":signOf(pl)+fmt(Math.abs(plPct))+"%"})</span></span>`;
 }
 
 function renderTable(byCode){
   const tb = document.getElementById("tbody");
+  // 正在編輯持股欄位時不重建，避免打字被自動更新打斷
+  if(document.activeElement && document.activeElement.classList.contains("hold")) return;
   tb.innerHTML = watch.map(w => {
     const m = byCode[w.code];
-    if(!m) return `<tr draggable="true" data-code="${w.code}"><td class="name">⠿ ${w.code} <span class="code">查無資料</span></td>
-      <td colspan="8" class="flat">—</td>
+    const qv = w.qty!=null ? w.qty : "";
+    const cv = w.cost!=null ? w.cost : "";
+    const holdCells = `
+      <td><input class="hold" type="number" min="0" step="1" data-code="${w.code}" data-f="qty" value="${qv}" placeholder="—"></td>
+      <td><input class="hold" type="number" min="0" step="0.01" data-code="${w.code}" data-f="cost" value="${cv}" placeholder="—"></td>`;
+    if(!m) return `<tr draggable="true" data-code="${w.code}">
+      <td class="name">⠿ ${w.code} <span class="code">查無資料</span></td>
+      <td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
+      ${holdCells}<td class="flat">—</td><td class="flat">—</td>
+      <td class="flat">—</td><td class="flat">—</td><td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
       <td><button class="del" data-code="${w.code}">✕</button></td></tr>`;
-    const d = calc(m);
+    const d = calc(m, w);
     return `<tr draggable="true" data-code="${m.c}">
       <td class="name">⠿ <b>${m.n||""}</b> <span class="code">${m.c}</span></td>
       <td class="px ${d.cls}">${fmt(d.price)}</td>
       <td class="${d.cls}">${d.sign} ${d.diff===null?"—":fmt(Math.abs(d.diff))}</td>
       <td class="${d.cls}">${d.pct===null?"—":fmt(Math.abs(d.pct))+"%"}</td>
+      ${holdCells}
+      <td class="${d.hasHold?clsOf(d.pl):'flat'}">${d.hasHold?signOf(d.pl)+" "+fmt(Math.abs(d.pl),0):"—"}</td>
+      <td class="${d.hasHold?clsOf(d.pl):'flat'}">${d.hasHold?signOf(d.pl)+fmt(Math.abs(d.plPct))+"%":"—"}</td>
       <td>${fmt(num(m.o))}</td><td>${fmt(num(m.h))}</td><td>${fmt(num(m.l))}</td>
       <td>${fmt(d.y)}</td><td>${d.vol===null?"—":d.vol.toLocaleString()}</td>
       <td><button class="del" data-code="${m.c}">✕</button></td>
     </tr>`;
   }).join("");
   tb.querySelectorAll(".del").forEach(b => b.onclick = () => removeCode(b.dataset.code));
+  tb.querySelectorAll("input.hold").forEach(inp => {
+    inp.onchange = () => setHold(inp.dataset.code, inp.dataset.f, inp.value);
+    inp.onkeydown = e => { if(e.key==="Enter") inp.blur(); };
+  });
   enableDrag(tb, "tr");
+}
+
+function setHold(code, field, value){
+  const w = watch.find(x=>x.code===code); if(!w) return;
+  const n = parseFloat(value);
+  w[field] = (value==="" || isNaN(n)) ? null : n;
+  save(); render();
 }
 
 function renderCards(byCode){
@@ -184,7 +255,11 @@ function renderCards(byCode){
       <button class="cdel" data-code="${w.code}">✕</button>
       <div class="cname">${w.code} <span class="ccode">查無資料</span></div>
       <div class="cpx flat">—</div><div class="crow flat"><span>—</span><span>—</span></div></div>`;
-    const d = calc(m);
+    const d = calc(m, w);
+    const hold = d.hasHold ? `<div class="chold">
+        <span class="lbl">持有 ${d.qty.toLocaleString()} 股 @ ${fmt(d.cost)}</span>
+        <span class="${clsOf(d.pl)}">${signOf(d.pl)} ${fmt(Math.abs(d.pl),0)} (${signOf(d.pl)}${fmt(Math.abs(d.plPct))}%)</span>
+      </div>` : "";
     return `<div class="card ${d.cls}" draggable="true" data-code="${m.c}">
       <button class="cdel" data-code="${m.c}">✕</button>
       <div class="cname">${m.n||""} <span class="ccode">${m.c}</span></div>
@@ -192,7 +267,7 @@ function renderCards(byCode){
       <div class="crow ${d.cls}">
         <span>${d.sign} ${d.diff===null?"—":fmt(Math.abs(d.diff))}</span>
         <span>${d.pct===null?"—":fmt(Math.abs(d.pct))+"%"}</span>
-      </div></div>`;
+      </div>${hold}</div>`;
   }).join("");
   wrap.querySelectorAll(".cdel").forEach(b => b.onclick = () => removeCode(b.dataset.code));
   enableDrag(wrap, ".card");
@@ -203,7 +278,10 @@ let dragCode = null;
 function enableDrag(container, sel){
   container.querySelectorAll(sel).forEach(el => {
     el.style.cursor = "grab";
-    el.ondragstart = e => { dragCode = el.dataset.code; e.dataTransfer.effectAllowed="move"; el.style.opacity=".4"; };
+    el.ondragstart = e => {
+      if(e.target.classList && e.target.classList.contains("hold")){ e.preventDefault(); return; } // 編輯持股時不啟動拖曳
+      dragCode = el.dataset.code; e.dataTransfer.effectAllowed="move"; el.style.opacity=".4";
+    };
     el.ondragend   = () => { el.style.opacity="1"; dragCode=null; };
     el.ondragover  = e => { e.preventDefault(); };
     el.ondrop      = e => {
