@@ -49,6 +49,20 @@
 在該檔的 ✎ 新增一筆「買」，填總股數、平均成本，日期填「大約開始扣款的年月」即可。
 （日期留空會被當成很早就持有，早年股利會被高估。）
 
+## 檔案
+
+| 檔案 | 用途 |
+|---|---|
+| `index.html` | 主程式（單檔，HTML + CSS + JS） |
+| `tests.html` | 純函式單元測試（持股／成本／股利計算） |
+| `README.md` | 說明文件 |
+| `CODE_REVIEW.md` | 程式碼審查報告 |
+
+## 測試
+
+把 `tests.html` 與 `index.html` 放同一資料夾，用瀏覽器開啟 `tests.html`（或部署後開 `.../tests.html`）。
+它以隱藏 iframe 載入 index.html，直接測試其 `window.StockCalc`（`curShares`／`avgCost`／`sharesAt`／`cashDivReceived`），不複製程式碼、不會與主程式脫鉤；畫面會顯示每項通過／失敗與總計。
+
 ## 資料來源與限制
 
 - 即時報價：台灣證交所 `mis.twse.com.tw`，純前端無法直連，經公用 CORS proxy（corsproxy / codetabs / allorigins）競速取得，proxy 偶有不穩。

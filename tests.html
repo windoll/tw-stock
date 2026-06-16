@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>單元測試 — 台股工具</title>
+<style>
+  body{font-family:-apple-system,"Microsoft JhengHei",monospace;background:#0f1115;color:#e6e8ee;padding:24px;line-height:1.7}
+  h1{font-size:18px}
+  pre{font-size:14px;white-space:pre-wrap}
+  .ok{color:#26c281}.bad{color:#ff5252}.sum{font-weight:700;margin-top:12px}
+</style>
+</head>
+<body>
+  <h1>單元測試（驗證 index.html 內的純計算函式）</h1>
+  <p style="color:#8b909c;font-size:13px">透過隱藏 iframe 載入 index.html，直接測試其 <code>window.StockCalc</code>，不複製程式碼、不會漂移。需以 http(s) 或本機開啟（同網域）。</p>
+  <pre id="out">載入中…（若一直停在此，請確認與 index.html 同一資料夾並用瀏覽器開啟）</pre>
+  <iframe id="app" src="index.html" style="display:none"></iframe>
+
+<script>
+const out = document.getElementById("out");
+let pass=0, fail=0, log="";
+function assert(name, cond){ log += (cond?"✅ ":"❌ ")+name+"\n"; cond?pass++:fail++; }
+function approx(a,b){ return Math.abs(a-b) < 1e-6; }
+
+document.getElementById("app").onload = () => {
+  const C = document.getElementById("app").contentWindow.StockCalc;
+  if(!C){ out.textContent = "❌ 找不到 StockCalc（index.html 版本過舊或未同網域）"; return; }
+
+  const w1 = {code:"X", lots:[
+    {date:"2024-01-01", type:"buy",  shares:1000, price:50},
+    {date:"2024-06-01", type:"buy",  shares:1000, price:60},
+  ]};
+  assert("curShares：兩筆買進累加 = 2000", C.curShares(w1) === 2000);
+  assert("avgCost：加權平均 = 55", approx(C.avgCost(w1), 55));
+  assert("sharesAt：買進前 = 0", C.sharesAt(w1, "2023-12-31") === 0);
+  assert("sharesAt：第一筆後 = 1000", C.sharesAt(w1, "2024-03-01") === 1000);
+  assert("sharesAt：第二筆後 = 2000", C.sharesAt(w1, "2024-07-01") === 2000);
+
+  const w2 = {code:"X", lots:[
+    {date:"2024-01-01", type:"buy",  shares:1000, price:50},
+    {date:"2024-06-01", type:"sell", shares:400,  price:70},
+  ]};
+  assert("curShares：含賣出 = 600", C.curShares(w2) === 600);
+  assert("avgCost：賣出不改變平均成本 = 50", approx(C.avgCost(w2), 50));
+
+  const w3 = {code:"X", lots:[{date:"", type:"buy", shares:500, price:10}]};
+  assert("sharesAt：空日期視為一直持有", C.sharesAt(w3, "2020-01-01") === 500);
+
+  // 注入股利資料測「依當下持股」的現金股利：1000*2 + 2000*3 = 8000；股票股利不計入
+  C.setDivData({ X:[
+    {kind:"cash",  ex:"2024-03-01", per:2},
+    {kind:"cash",  ex:"2024-09-01", per:3},
+    {kind:"stock", ex:"2024-03-01", per:1},
+  ]});
+  assert("cashDivReceived：依各除息日當下持股 = 8000", approx(C.cashDivReceived(w1), 8000));
+
+  out.innerHTML = log.replace(/✅/g,'<span class="ok">✅</span>').replace(/❌/g,'<span class="bad">❌</span>')
+    + `\n<span class="sum ${fail?'bad':'ok'}">${pass} 通過，${fail} 失敗</span>`;
+};
+</script>
+</body>
+</html>

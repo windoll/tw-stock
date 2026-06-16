@@ -59,10 +59,8 @@
   .card .chold{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);font-size:13px;display:flex;justify-content:space-between}
   .card .chold .lbl{color:var(--sub);font-weight:400}
 
-  /* 持股輸入與總計 */
+  /* 持股總計 */
   .tablewrap{overflow-x:auto}
-  input.hold{width:74px;min-width:0;flex:none;padding:5px 6px;font-size:13px;text-align:right}
-  input.hold::-webkit-outer-spin-button,input.hold::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
   .summary{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 14px;
     margin-bottom:14px;font-size:14px;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
   .summary .lbl{color:var(--sub)}
@@ -167,7 +165,7 @@
         <tr>
           <th class="name">名稱</th>
           <th>成交</th><th>漲跌</th><th>幅度</th>
-          <th>股數</th><th class="col-cost">買價</th><th>損益</th><th>報酬率</th><th class="col-yield">殖利率</th>
+          <th>股數</th><th class="col-cost">買價</th><th>損益</th><th>報酬率</th><th class="col-yield" title="近一年現金股利 ÷ 現價">殖利率</th>
           <th class="col-o">開</th><th class="col-h">高</th><th class="col-l">低</th><th class="col-yc">昨收</th><th class="col-vol">量</th><th></th>
         </tr>
       </thead>
@@ -216,6 +214,7 @@
   <div id="modal" class="modal hidden"></div>
 
 <script>
+(function(){
 const LS_KEY = "tw_watchlist_v1";
 const LS_VIEW = "tw_view_v1";
 const LS_PRIV = "tw_priv_v1";
@@ -252,7 +251,7 @@ async function loadStockList(){
           const j=await r.json(); arr=(j.data||[]).map(x=>[x.stock_id,x.stock_name]);
           localStorage.setItem("tw_stocklist", JSON.stringify({t:Date.now(), d:arr})); }
     const seen=new Set(), opts=[];
-    arr.forEach(([c,n])=>{ if(!c||!n||seen.has(c)) return; seen.add(c); codeName[c]=n; if(!nameToCode[n]) nameToCode[n]=c; opts.push(`<option value="${c} ${n}">`); });
+    arr.forEach(([c,n])=>{ if(!c||!n||seen.has(c)) return; seen.add(c); codeName[c]=n; if(!nameToCode[n]) nameToCode[n]=c; opts.push(`<option value="${esc(c)} ${esc(n)}">`); });
     const dl=document.getElementById("stockList"); if(dl) dl.innerHTML=opts.join("");
   }catch(e){}
 }
@@ -294,6 +293,8 @@ async function fetchQuotes(codes){
 
 function num(v){ const n = parseFloat(v); return isNaN(n) ? null : n; }
 function num0(v){ const n = parseFloat(v); return isNaN(n) ? 0 : n; }
+// HTML 跳脫：用於插入來自 API 的外部字串（如股票名稱）
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 function pickPrice(m){
   let p = num(m.z);
   if(p===null){ const a = (m.a||"").split("_")[0]; p = num(a); }
@@ -338,7 +339,7 @@ function renderPie(byCode){
   items.sort((a,b)=>b.val-a.val);
   const colors=["#4f8cff","#ff5252","#26c281","#f7b955","#a06bff","#28c0c0","#ff8a65","#9aa0ad","#e066a6","#6ab04c"];
   let acc=0; const segs=items.map((x,i)=>{ const a=acc/total*360; acc+=x.val; return `${colors[i%colors.length]} ${a}deg ${acc/total*360}deg`; });
-  const legend=items.map((x,i)=>`<div class="leg"><span class="dotc" style="background:${colors[i%colors.length]}"></span>${x.name} <span class="priv">${(x.val/total*100).toFixed(1)}%</span></div>`).join("");
+  const legend=items.map((x,i)=>`<div class="leg"><span class="dotc" style="background:${colors[i%colors.length]}"></span>${esc(x.name)} <span class="priv">${(x.val/total*100).toFixed(1)}%</span></div>`).join("");
   wrap.classList.remove("hidden");
   wrap.innerHTML=`<div class="pieC" style="background:conic-gradient(${segs.join(",")})"></div><div class="legwrap">${legend}</div>`;
 }
@@ -349,7 +350,7 @@ function renderAlert(){
   const plus  = new Date(Date.now()+14*864e5).toISOString().slice(0,10);
   const items=[];
   watch.forEach(w => { const l=divData[w.code]; if(!l) return;
-    l.forEach(d => { if(d.ex>=today && d.ex<=plus) items.push(`${nameMap[w.code]||w.code}(${w.code}) ${d.ex} ${d.kind==="cash"?"除息":"除權"}`); });
+    l.forEach(d => { if(d.ex>=today && d.ex<=plus) items.push(`${esc(nameMap[w.code]||w.code)}(${w.code}) ${d.ex} ${d.kind==="cash"?"除息":"除權"}`); });
   });
   if(!items.length){ box.classList.add("hidden"); box.innerHTML=""; return; }
   box.classList.remove("hidden");
@@ -363,7 +364,7 @@ function renderIndex(arr){
     const z=num(m.z), y=num(m.y);
     const diff=(z!==null&&y!==null)?z-y:null, pct=(diff!==null&&y)?diff/y*100:null, cls=clsOf(diff);
     const nm = m.n==="發行量加權股價指數"?"加權指數" : m.n==="櫃買指數"?"櫃買指數" : (m.n||m.ch);
-    return `<span class="idx"><span class="lbl">${nm}</span> <b class="${cls}">${z===null?"—":fmt(z)}</b> <span class="${cls}">${diff===null?"":signOf(diff)+fmt(Math.abs(diff))+" ("+fmt(Math.abs(pct))+"%)"}</span></span>`;
+    return `<span class="idx"><span class="lbl">${esc(nm)}</span> <b class="${cls}">${z===null?"—":fmt(z)}</b> <span class="${cls}">${diff===null?"":signOf(diff)+fmt(Math.abs(diff))+" ("+fmt(Math.abs(pct))+"%)"}</span></span>`;
   }).join("");
 }
 
@@ -418,7 +419,7 @@ function openLots(code){
   }
   md.innerHTML = `<div class="modal-box">
       <button class="x" id="lotClose">✕</button>
-      <h3>${name} ${code}　交易紀錄</h3>
+      <h3>${esc(name)} ${code}　交易紀錄</h3>
       <table class="lottable"><thead><tr><th>日期</th><th>買賣</th><th>股數</th><th>價格</th><th></th></tr></thead><tbody id="lotBody"></tbody></table>
       <div style="margin:10px 0"><button id="lotAdd" class="ghost">＋ 新增一筆</button></div>
       <div id="lotSummary" class="priv" style="color:var(--sub);font-size:13px"></div>
@@ -434,7 +435,7 @@ function openLots(code){
 // ── 個股走勢圖（FinMind 股價）──
 async function openChart(code){
   const name=nameMap[code]||""; const md=document.getElementById("modal");
-  md.innerHTML=`<div class="modal-box"><button class="x" id="cClose">✕</button><h3>${name} ${code}　近 3 個月收盤</h3><div id="cBody">載入中…</div></div>`;
+  md.innerHTML=`<div class="modal-box"><button class="x" id="cClose">✕</button><h3>${esc(name)} ${code}　近 3 個月收盤</h3><div id="cBody">載入中…</div></div>`;
   md.classList.remove("hidden");
   md.querySelector("#cClose").onclick=closeModal; md.onclick=e=>{ if(e.target===md) closeModal(); };
   try{
@@ -493,7 +494,7 @@ function renderSummary(byCode){
   const plTotPct = totalCost ? plTot/totalCost*100 : null;
   const clsT = clsOf(plTot);
   const incLine = totalDiv>0 ? `
-    <span><span class="lbl">含息損益</span> <b class="priv ${clsT}">${signOf(plTot)} ${fmt(Math.abs(plTot),0)}</b>
+    <span><span class="lbl" title="未實現損益 + 累計實際領到的現金股利">含息損益</span> <b class="priv ${clsT}">${signOf(plTot)} ${fmt(Math.abs(plTot),0)}</b>
       <span class="priv ${clsT}">(${plTotPct===null?"—":signOf(plTot)+fmt(Math.abs(plTotPct))+"%"})</span></span>` : "";
   box.innerHTML = `
     <span><span class="lbl">總成本</span> <span class="priv">${fmt(totalCost,0)}</span></span>
@@ -520,7 +521,7 @@ function renderTable(byCode){
     const d = calc(m, w);
     const yld = divCashTTM(m.c), yPct = (yld>0 && d.price) ? yld/d.price*100 : null;
     return `<tr draggable="true" data-code="${m.c}">
-      <td class="name">⠿ <b>${m.n||""}</b> <span class="code">${m.c}</span> ${btns}</td>
+      <td class="name">⠿ <b>${esc(m.n)}</b> <span class="code">${m.c}</span> ${btns}</td>
       <td class="px ${d.cls}">${fmt(d.price)}</td>
       <td class="${d.cls}">${d.sign} ${d.diff===null?"—":fmt(Math.abs(d.diff))}</td>
       <td class="${d.cls}">${d.pct===null?"—":fmt(Math.abs(d.pct))+"%"}</td>
@@ -554,7 +555,7 @@ function renderCards(byCode){
       </div>` : "";
     return `<div class="card ${d.cls}" draggable="true" data-code="${m.c}">
       <button class="cdel" data-code="${m.c}">✕</button>
-      <div class="cname">${m.n||""} <span class="ccode">${m.c}</span></div>
+      <div class="cname">${esc(m.n)} <span class="ccode">${m.c}</span></div>
       <div class="cpx ${d.cls}">${fmt(d.price)}</div>
       <div class="crow ${d.cls}">
         <span>${d.sign} ${d.diff===null?"—":fmt(Math.abs(d.diff))}</span>
@@ -717,7 +718,7 @@ function renderDivPage(){
   watch.forEach(w => {
     const list = divData[w.code];
     const name = nameMap[w.code] || "";
-    const nameCell = `<td class="name"><b>${name}</b> <span class="code">${w.code}</span></td>`;
+    const nameCell = `<td class="name"><b>${esc(name)}</b> <span class="code">${w.code}</span></td>`;
     if(!list){ rows.push(`<tr>${nameCell}<td colspan="6" class="flat">查無（尚未同步或無資料）</td></tr>`); return; }
     const inR = list.filter(d => d.ex && (!s||d.ex>=s) && (!e||d.ex<=e))
                     .sort((a,b)=> a.ex<b.ex ? -1 : 1);
@@ -751,7 +752,7 @@ function renderDivPage(){
     if(stShares) parts.push(`<span class="priv up">${fmt(stShares,0)} 股</span>`);
     const subTxt = parts.length ? parts.join("　") : '<span class="flat">當時未持有/未填交易</span>';
     rows.push(`<tr class="dhead" data-g="${w.code}">
-      <td class="name"><span class="arrow">▸</span> <b>${name}</b> <span class="code">${w.code}</span></td>
+      <td class="name"><span class="arrow">▸</span> <b>${esc(name)}</b> <span class="code">${w.code}</span></td>
       <td colspan="3" class="code">${inR.length} 筆</td>
       <td></td>
       <td class="priv">${curShares(w)?curShares(w).toLocaleString():"—"}</td>
@@ -822,6 +823,10 @@ try{ divData = JSON.parse(localStorage.getItem(LS_DIV)) || {}; }catch(e){ divDat
 setPrivacy(localStorage.getItem(LS_PRIV)==="1");
 applyCols();
 setView(view); refresh(); setupTimer(); fetchIndices(); loadStockList();
+
+// 對外暴露純函式，供 tests.html 驗證（不影響其餘封裝）
+window.StockCalc = { curShares, avgCost, sharesAt, cashDivReceived, setDivData(d){ divData = d || {}; } };
+})();
 </script>
 </body>
 </html>
