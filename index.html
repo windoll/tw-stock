@@ -140,9 +140,9 @@
       <span id="divStatus" class="code"></span>
     </div>
     <div class="note">
-      說明：來源為 FinMind 股利資料，<b>含 ETF 與個股、有歷史</b>，採<b>真正的除息交易日</b>，
-      區間內多次除息（月配／季配 ETF）會逐筆加總。
-      「期間現金股利」＝每股現金股利 × 你輸入的股數（需先在「報價」頁填股數）。
+      說明：來源為 FinMind 股利資料，<b>含 ETF 與個股、有歷史</b>，採<b>真正的除權息日</b>，
+      現金與股票股利分開逐筆列示。現金＝每股現金 × 股數（元）；股票＝股數 × 每股股票股利 ÷ 10（股）。
+      需先在「報價」頁填股數。
       註：FinMind 免費額度有每小時請求上限，若顯示達上限請稍後再按一次。
     </div>
     <div class="summary hidden" id="divSummary"></div>
@@ -150,8 +150,8 @@
     <table>
       <thead>
         <tr>
-          <th class="name">名稱</th><th class="name">區間內除息日</th>
-          <th>現金/股(合計)</th><th>股數</th><th>期間現金股利</th>
+          <th class="name">名稱</th><th>類型</th><th class="name">除權息日</th><th class="name">發放日</th>
+          <th>每股配發</th><th>股數</th><th>本筆領取</th>
         </tr>
       </thead>
       <tbody id="divBody"></tbody>
@@ -413,12 +413,14 @@ async function syncDividends(){
         const r = await fetch(url, {cache:"no-store"});
         const j = await r.json();
         if(j.msg && /limit/i.test(j.msg)) return [w.code, null, "FinMind 請求達上限"];
-        const rows = (j.data||[]).map(d => ({
-          ex:  d.CashExDividendTradingDate || d.date || "",
-          pay: d.CashDividendPaymentDate || "",
-          cash:(d.CashEarningsDistribution||0) + (d.CashStatutorySurplus||0)
-        })).filter(d => d.cash>0 && d.ex);
-        return [w.code, rows];
+        const rows = [];
+        (j.data||[]).forEach(d => {
+          const cash  = (d.CashEarningsDistribution||0) + (d.CashStatutorySurplus||0);
+          const stock = (d.StockEarningsDistribution||0) + (d.StockStatutorySurplus||0);
+          if(cash>0)  rows.push({ kind:"cash",  ex: d.CashExDividendTradingDate  || d.date || "", pay: d.CashDividendPaymentDate || "", per: cash });
+          if(stock>0) rows.push({ kind:"stock", ex: d.StockExDividendTradingDate || d.date || "", pay: "", per: stock });
+        });
+        return [w.code, rows.filter(d=>d.ex)];
       }catch(e){ return [w.code, null, e.message]; }
     }));
     const map={}; let err="";
@@ -439,32 +441,48 @@ function renderDivPage(){
   if(!watch.length){ empty.textContent="請先到「報價」頁加入股票"; empty.style.display="block"; body.innerHTML=""; sum.classList.add("hidden"); return; }
   if(!Object.keys(divData).length){ empty.textContent='按「同步股利」抓取你清單內股票的股利資料。'; empty.style.display="block"; body.innerHTML=""; sum.classList.add("hidden"); return; }
   empty.style.display="none";
-  let total=0;
-  body.innerHTML = watch.map(w => {
+  let totalCash=0, totalShares=0;
+  const rows=[];
+  watch.forEach(w => {
     const list = divData[w.code];
     const qty = num0(w.qty);
     const name = nameMap[w.code] || "";
-    if(!list) return `<tr><td class="name"><b>${name}</b> <span class="code">${w.code}</span></td><td colspan="4" class="flat">查無（尚未同步或無資料）</td></tr>`;
-    const inR = list.filter(d => d.ex && (!s||d.ex>=s) && (!e||d.ex<=e));
-    const cashSum = inR.reduce((a,d)=>a+d.cash, 0);
-    const received = cashSum * qty;
-    if(received) total += received;
-    const dates = inR.length ? inR.map(d=>d.ex).join("、") : "—";
-    let recTxt;
-    if(!inR.length) recTxt = '<span class="flat">區間內無除息</span>';
-    else if(!qty) recTxt = '<span class="flat">未填股數</span>';
-    else recTxt = `<span class="priv up">${fmt(received,0)}</span>`;
-    return `<tr>
-      <td class="name"><b>${name}</b> <span class="code">${w.code}</span></td>
-      <td class="name code">${dates}</td>
-      <td>${inR.length?fmt(cashSum):"—"}</td>
-      <td class="priv">${qty?qty.toLocaleString():"—"}</td>
-      <td>${recTxt}</td>
-    </tr>`;
-  }).join("");
+    const nameCell = `<td class="name"><b>${name}</b> <span class="code">${w.code}</span></td>`;
+    if(!list){ rows.push(`<tr>${nameCell}<td colspan="6" class="flat">查無（尚未同步或無資料）</td></tr>`); return; }
+    const inR = list.filter(d => d.ex && (!s||d.ex>=s) && (!e||d.ex<=e))
+                    .sort((a,b)=> a.ex<b.ex ? -1 : 1);
+    if(!inR.length){ rows.push(`<tr>${nameCell}<td colspan="6" class="flat">區間內無除權息</td></tr>`); return; }
+    inR.forEach(d => {                         // 同股票多筆、現金/股票分開列
+      let typeTxt, perTxt, recTxt;
+      if(d.kind==="cash"){
+        const got = d.per * qty;
+        if(got) totalCash += got;
+        typeTxt = "現金";
+        perTxt = `現金 ${fmt(d.per)}`;
+        recTxt = qty ? `<span class="priv up">${fmt(got,0)} 元</span>` : '<span class="flat">未填股數</span>';
+      }else{
+        const shares = qty * d.per / 10;       // 股票股利 X元/股 = X/10 股
+        if(shares) totalShares += shares;
+        typeTxt = "股票";
+        perTxt = `股票 ${fmt(d.per)}`;
+        recTxt = qty ? `<span class="priv up">${fmt(shares,0)} 股</span>` : '<span class="flat">未填股數</span>';
+      }
+      rows.push(`<tr>
+        ${nameCell}
+        <td>${typeTxt}</td>
+        <td class="name code">${d.ex}</td>
+        <td class="name code">${d.pay||"—"}</td>
+        <td>${perTxt}</td>
+        <td class="priv">${qty?qty.toLocaleString():"—"}</td>
+        <td>${recTxt}</td>
+      </tr>`);
+    });
+  });
+  body.innerHTML = rows.join("");
   sum.classList.remove("hidden");
-  sum.innerHTML = `<span class="lbl">區間 ${s||"—"} ~ ${e||"—"}（依除息日）</span>
-    <span><span class="lbl">期間現金股利合計</span> <b class="priv up">${fmt(total,0)}</b></span>`;
+  sum.innerHTML = `<span class="lbl">區間 ${s||"—"} ~ ${e||"—"}（依除權息日）</span>
+    <span><span class="lbl">現金股利合計</span> <b class="priv up">${fmt(totalCash,0)} 元</b></span>
+    <span><span class="lbl">股票股利合計</span> <b class="priv up">${fmt(totalShares,0)} 股</b></span>`;
 }
 
 function setPage(p){
