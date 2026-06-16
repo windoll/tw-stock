@@ -97,6 +97,7 @@
         <th class="name">名稱</th>
         <th>成交</th><th>漲跌</th><th>幅度</th>
         <th>股數</th><th>買價</th><th>損益</th><th>報酬率</th>
+        <th class="name">股利（現金／股票）</th>
         <th>開</th><th>高</th><th>低</th><th>昨收</th><th>量</th><th></th>
       </tr>
     </thead>
@@ -115,6 +116,49 @@ let timer = null;
 
 function load(){ try{ return JSON.parse(localStorage.getItem(LS_KEY))||[] }catch(e){ return [] } }
 function save(){ localStorage.setItem(LS_KEY, JSON.stringify(watch)); }
+
+// ── 股利資料（TWSE OpenAPI，支援 CORS 可直連；僅上市）──────────────
+// 註：此資料集只有「股利年度／董事會分派日」，無「除權息交易日」；上櫃不在內。
+let divMap = {};            // code -> {year, cash, stock, date}
+const DIV_URL = "https://openapi.twse.com.tw/v1/opendata/t187ap45_L";
+
+function rocDate(s){        // 民國日期字串 1150311 -> 2026/03/11
+  if(!s || s.length<6) return "";
+  const y = parseInt(s.slice(0, s.length-4),10) + 1911;
+  return `${y}/${s.slice(-4,-2)}/${s.slice(-2)}`;
+}
+function sumFields(row, keys){ return keys.reduce((a,k)=>a + (parseFloat(row[k])||0), 0); }
+
+async function loadDividends(){
+  try{
+    const r = await fetch(DIV_URL, {cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const arr = await r.json();
+    const map = {};
+    arr.forEach(row => {
+      const code = row["公司代號"];
+      if(!code) return;
+      const cash = sumFields(row, ["股東配發-盈餘分配之現金股利(元/股)","股東配發-法定盈餘公積發放之現金(元/股)","股東配發-資本公積發放之現金(元/股)"]);
+      const stock = sumFields(row, ["股東配發-盈餘轉增資配股(元/股)","股東配發-法定盈餘公積轉增資配股(元/股)","股東配發-資本公積轉增資配股(元/股)"]);
+      const date = row["董事會（擬議）股利分派日"] || row["股東會日期"] || "";
+      // 同代號可能多筆（季配等），保留分派日最新的一筆
+      const prev = map[code];
+      if(!prev || date > prev.rawDate){
+        map[code] = {year: row["股利年度"]||"", cash, stock, date: rocDate(date), rawDate: date};
+      }
+    });
+    divMap = map;
+    render();   // 股利到位後重繪
+  }catch(e){ /* 股利抓取失敗不影響報價 */ }
+}
+
+function divCell(code){
+  const d = divMap[code];
+  if(!d || (!d.cash && !d.stock)) return `<span class="flat">—</span>`;
+  const yr = d.year ? d.year+"年 " : "";
+  const sub = d.date ? `<div class="code">${yr}分派 ${d.date}</div>` : (yr?`<div class="code">${yr}</div>`:"");
+  return `現金 ${fmt(d.cash)}　股票 ${fmt(d.stock)}${sub}`;
+}
 
 // 經 CORS proxy 抓 TWSE 即時報價（純前端無法直連 mis.twse）
 const PROXIES = [
@@ -225,6 +269,7 @@ function renderTable(byCode){
       <td class="name">⠿ ${w.code} <span class="code">查無資料</span></td>
       <td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
       ${holdCells}<td class="flat">—</td><td class="flat">—</td>
+      <td class="name">${divCell(w.code)}</td>
       <td class="flat">—</td><td class="flat">—</td><td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
       <td><button class="del" data-code="${w.code}">✕</button></td></tr>`;
     const d = calc(m, w);
@@ -236,6 +281,7 @@ function renderTable(byCode){
       ${holdCells}
       <td class="${d.hasHold?clsOf(d.pl):'flat'}">${d.hasHold?signOf(d.pl)+" "+fmt(Math.abs(d.pl),0):"—"}</td>
       <td class="${d.hasHold?clsOf(d.pl):'flat'}">${d.hasHold?signOf(d.pl)+fmt(Math.abs(d.plPct))+"%":"—"}</td>
+      <td class="name">${divCell(m.c)}</td>
       <td>${fmt(num(m.o))}</td><td>${fmt(num(m.h))}</td><td>${fmt(num(m.l))}</td>
       <td>${fmt(d.y)}</td><td>${d.vol===null?"—":d.vol.toLocaleString()}</td>
       <td><button class="del" data-code="${m.c}">✕</button></td>
@@ -269,6 +315,11 @@ function renderCards(byCode){
         <span class="lbl">持有 ${d.qty.toLocaleString()} 股 @ ${fmt(d.cost)}</span>
         <span class="${clsOf(d.pl)}">${signOf(d.pl)} ${fmt(Math.abs(d.pl),0)} (${signOf(d.pl)}${fmt(Math.abs(d.plPct))}%)</span>
       </div>` : "";
+    const dv = divMap[m.c];
+    const divLine = (dv && (dv.cash||dv.stock)) ? `<div class="chold">
+        <span class="lbl">股利${dv.year?" "+dv.year+"年":""}</span>
+        <span>現金 ${fmt(dv.cash)}　股票 ${fmt(dv.stock)}</span>
+      </div>` : "";
     return `<div class="card ${d.cls}" draggable="true" data-code="${m.c}">
       <button class="cdel" data-code="${m.c}">✕</button>
       <div class="cname">${m.n||""} <span class="ccode">${m.c}</span></div>
@@ -276,7 +327,7 @@ function renderCards(byCode){
       <div class="crow ${d.cls}">
         <span>${d.sign} ${d.diff===null?"—":fmt(Math.abs(d.diff))}</span>
         <span>${d.pct===null?"—":fmt(Math.abs(d.pct))+"%"}</span>
-      </div>${hold}</div>`;
+      </div>${hold}${divLine}</div>`;
   }).join("");
   wrap.querySelectorAll(".cdel").forEach(b => b.onclick = () => removeCode(b.dataset.code));
   enableDrag(wrap, ".card");
@@ -360,7 +411,7 @@ document.getElementById("codeInput").addEventListener("keydown", e => { if(e.key
 document.getElementById("interval").addEventListener("change", setupTimer);
 document.querySelectorAll("#viewToggle button").forEach(b => b.onclick = () => setView(b.dataset.view));
 
-setView(view); refresh(); setupTimer();
+setView(view); refresh(); setupTimer(); loadDividends();
 </script>
 </body>
 </html>
