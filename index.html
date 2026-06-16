@@ -262,8 +262,8 @@ function renderTable(byCode){
     const qv = w.qty!=null ? w.qty : "";
     const cv = w.cost!=null ? w.cost : "";
     const holdCells = `
-      <td><input class="hold" type="number" min="0" step="1" data-code="${w.code}" data-f="qty" value="${qv}" placeholder="—"></td>
-      <td><input class="hold" type="number" min="0" step="0.01" data-code="${w.code}" data-f="cost" value="${cv}" placeholder="—"></td>`;
+      <td><input class="hold priv" type="number" min="0" step="1" data-code="${w.code}" data-f="qty" value="${qv}" placeholder="—"></td>
+      <td><input class="hold priv" type="number" min="0" step="0.01" data-code="${w.code}" data-f="cost" value="${cv}" placeholder="—"></td>`;
     if(!m) return `<tr draggable="true" data-code="${w.code}">
       <td class="name">⠿ ${w.code} <span class="code">查無資料</span></td>
       <td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
@@ -309,7 +309,7 @@ function renderCards(byCode){
       <div class="cpx flat">—</div><div class="crow flat"><span>—</span><span>—</span></div></div>`;
     const d = calc(m, w);
     const hold = d.hasHold ? `<div class="chold">
-        <span class="lbl">持有 ${d.qty.toLocaleString()} 股 @ ${fmt(d.cost)}</span>
+        <span class="lbl priv">持有 ${d.qty.toLocaleString()} 股 @ ${fmt(d.cost)}</span>
         <span class="priv ${clsOf(d.pl)}">${signOf(d.pl)} ${fmt(Math.abs(d.pl),0)} (${signOf(d.pl)}${fmt(Math.abs(d.plPct))}%)</span>
       </div>` : "";
     return `<div class="card ${d.cls}" draggable="true" data-code="${m.c}">
@@ -462,7 +462,7 @@ function renderDivPage(){
       <td class="name"><b>${name}</b> <span class="code">${w.code}</span></td>
       <td class="name code">${dates}</td>
       <td>${inR.length?fmt(cashSum):"—"}</td>
-      <td>${qty?qty.toLocaleString():"—"}</td>
+      <td class="priv">${qty?qty.toLocaleString():"—"}</td>
       <td>${recTxt}</td>
     </tr>`;
   }).join("");
