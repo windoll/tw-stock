@@ -86,6 +86,20 @@
   .legwrap{display:flex;flex-direction:column;gap:4px;font-size:13px}
   .leg{display:flex;align-items:center;gap:6px}
   .dotc{width:10px;height:10px;border-radius:2px;display:inline-block}
+  button.mini{background:none;border:none;color:var(--sub);cursor:pointer;font-size:13px;padding:2px 4px}
+  button.mini:hover{color:var(--accent)}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px}
+  .modal-box{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:18px;max-width:560px;width:100%;max-height:88vh;overflow:auto}
+  .modal-box h3{margin:0 0 12px;font-size:16px}
+  .modal-box .x{float:right;cursor:pointer;color:var(--sub);background:none;border:none;font-size:18px}
+  .lottable input,.lottable select{padding:6px 8px;font-size:13px;width:100%}
+  .lottable td{padding:4px}
+  .yearbars{display:flex;flex-direction:column;gap:6px;margin:10px 0 18px}
+  .ybar{display:flex;align-items:center;gap:8px;font-size:13px}
+  .ybar .yl{width:48px;color:var(--sub)}
+  .ybar .yt{flex:1;background:var(--line);border-radius:4px;height:18px;overflow:hidden}
+  .ybar .yf{height:100%;background:var(--accent)}
+  .ybar .yv{width:110px;text-align:right}
 </style>
 </head>
 <body>
@@ -168,6 +182,10 @@
       需先在「報價」頁填股數。
       註：FinMind 免費額度有每小時請求上限，若顯示達上限請稍後再按一次。
     </div>
+    <div id="yearWrap" class="hidden">
+      <div class="lbl" style="color:var(--sub);font-size:13px;margin-bottom:4px">各年度現金股利（依當年實際持股）</div>
+      <div class="yearbars" id="yearBars"></div>
+    </div>
     <div class="summary hidden" id="divSummary"></div>
     <div class="tablewrap">
     <table>
@@ -183,6 +201,8 @@
     <div class="empty" id="divEmpty">按「同步股利」抓取你清單內股票的股利資料。</div>
   </div>
 
+  <div id="modal" class="modal hidden"></div>
+
 <script>
 const LS_KEY = "tw_watchlist_v1";
 const LS_VIEW = "tw_view_v1";
@@ -192,8 +212,23 @@ let watch = load();
 let view = localStorage.getItem(LS_VIEW) || "table";   // table | cards
 let timer = null;
 
-function load(){ try{ return JSON.parse(localStorage.getItem(LS_KEY))||[] }catch(e){ return [] } }
+function load(){
+  let arr=[]; try{ arr = JSON.parse(localStorage.getItem(LS_KEY))||[]; }catch(e){ arr=[]; }
+  // 舊格式 {code,qty,cost} → 交易紀錄 lots
+  return arr.map(w => {
+    if(Array.isArray(w.lots)) return w;
+    const lots=[];
+    if(w.qty) lots.push({date:"", type:"buy", shares:+w.qty, price:+(w.cost||0)});
+    return {code:w.code, lots};
+  });
+}
 function save(){ localStorage.setItem(LS_KEY, JSON.stringify(watch)); }
+
+// 交易紀錄推導
+function lotsOf(w){ return Array.isArray(w.lots)?w.lots:[]; }
+function curShares(w){ return lotsOf(w).reduce((a,l)=> a + (l.type==="sell"?-1:1)*(parseFloat(l.shares)||0), 0); }
+function avgCost(w){ let s=0,c=0; lotsOf(w).forEach(l=>{ if(l.type!=="sell"){ const sh=parseFloat(l.shares)||0,p=parseFloat(l.price)||0; s+=sh; c+=sh*p; } }); return s>0?c/s:0; }
+function sharesAt(w, iso){ return lotsOf(w).reduce((a,l)=> (!l.date||l.date<=iso) ? a+(l.type==="sell"?-1:1)*(parseFloat(l.shares)||0) : a, 0); }
 
 // ───── 即時報價（經 CORS proxy，純前端無法直連 mis.twse）─────
 const PROXIES = [
@@ -242,9 +277,9 @@ function calc(m, w){
   const y = num(m.y);
   const diff = (price!==null && y!==null) ? price - y : null;
   const pct  = (diff!==null && y) ? diff / y * 100 : null;
-  const qty = w && num(w.qty), cost = w && num(w.cost);
+  const qty = w ? curShares(w) : 0, cost = w ? avgCost(w) : 0;
   let pl=null, plPct=null, hasHold=false;
-  if(qty && cost && price!==null){ hasHold=true; pl=(price-cost)*qty; plPct=(price-cost)/cost*100; }
+  if(qty>0 && cost>0 && price!==null){ hasHold=true; pl=(price-cost)*qty; plPct=(price-cost)/cost*100; }
   return {price, y, diff, pct, cls:clsOf(diff), sign:signOf(diff), vol:num(m.v), qty, cost, pl, plPct, hasHold};
 }
 
@@ -315,10 +350,94 @@ function importData(file){
   const rd=new FileReader();
   rd.onload=()=>{ try{ const j=JSON.parse(rd.result);
       if(!Array.isArray(j.watch)) throw new Error("缺少 watch");
-      watch=j.watch; if(j.view) view=j.view; save(); setView(view); refresh();
+      watch = j.watch.map(w => Array.isArray(w.lots) ? w : {code:w.code, lots: w.qty?[{date:"",type:"buy",shares:+w.qty,price:+(w.cost||0)}]:[]});
+      if(j.view) view=j.view; save(); setView(view); refresh();
       alert("匯入完成，共 "+watch.length+" 檔");
     }catch(e){ alert("匯入失敗："+e.message); } };
   rd.readAsText(file);
+}
+
+// ── 交易紀錄編輯彈窗 ──
+function closeModal(){ const md=document.getElementById("modal"); md.classList.add("hidden"); md.innerHTML=""; }
+function openLots(code){
+  const w = watch.find(x=>x.code===code); if(!w) return;
+  if(!Array.isArray(w.lots)) w.lots=[];
+  const name = nameMap[code]||"";
+  const md = document.getElementById("modal");
+  const sumTxt = () => `持股 ${curShares(w).toLocaleString()} 股　平均成本 ${fmt(avgCost(w))}`;
+  function rowsHtml(){ return w.lots.map((l,i)=>`<tr>
+      <td><input type="date" data-i="${i}" data-f="date" value="${l.date||""}"></td>
+      <td><select data-i="${i}" data-f="type"><option value="buy"${l.type!=="sell"?" selected":""}>買</option><option value="sell"${l.type==="sell"?" selected":""}>賣</option></select></td>
+      <td><input type="number" min="0" step="1" data-i="${i}" data-f="shares" value="${l.shares??""}" placeholder="股數"></td>
+      <td><input type="number" min="0" step="0.01" data-i="${i}" data-f="price" value="${l.price??""}" placeholder="價格"></td>
+      <td><button class="mini lotdel" data-i="${i}">✕</button></td></tr>`).join(""); }
+  function draw(){
+    md.querySelector("#lotBody").innerHTML = rowsHtml();
+    md.querySelector("#lotSummary").innerHTML = sumTxt();
+    md.querySelectorAll("#lotBody input,#lotBody select").forEach(el=>{
+      el.onchange=()=>{ const i=+el.dataset.i,f=el.dataset.f,v=el.value;
+        w.lots[i][f]=(f==="shares"||f==="price")?(v===""?0:+v):v; save();
+        md.querySelector("#lotSummary").innerHTML=sumTxt(); render(); };
+    });
+    md.querySelectorAll(".lotdel").forEach(b=>b.onclick=()=>{ w.lots.splice(+b.dataset.i,1); save(); draw(); render(); });
+  }
+  md.innerHTML = `<div class="modal-box">
+      <button class="x" id="lotClose">✕</button>
+      <h3>${name} ${code}　交易紀錄</h3>
+      <table class="lottable"><thead><tr><th>日期</th><th>買賣</th><th>股數</th><th>價格</th><th></th></tr></thead><tbody id="lotBody"></tbody></table>
+      <div style="margin:10px 0"><button id="lotAdd" class="ghost">＋ 新增一筆</button></div>
+      <div id="lotSummary" class="priv" style="color:var(--sub);font-size:13px"></div>
+      <div class="note" style="margin-top:8px">填日期才能算「各年度依當年持股」的股利；留空代表很早就持有。</div>
+    </div>`;
+  md.classList.remove("hidden");
+  md.querySelector("#lotClose").onclick = closeModal;
+  md.onclick = e => { if(e.target===md) closeModal(); };
+  md.querySelector("#lotAdd").onclick = ()=>{ w.lots.push({date:"",type:"buy",shares:0,price:0}); save(); draw(); };
+  draw();
+}
+
+// ── 個股走勢圖（FinMind 股價）──
+async function openChart(code){
+  const name=nameMap[code]||""; const md=document.getElementById("modal");
+  md.innerHTML=`<div class="modal-box"><button class="x" id="cClose">✕</button><h3>${name} ${code}　近 3 個月收盤</h3><div id="cBody">載入中…</div></div>`;
+  md.classList.remove("hidden");
+  md.querySelector("#cClose").onclick=closeModal; md.onclick=e=>{ if(e.target===md) closeModal(); };
+  try{
+    const start=new Date(Date.now()-95*864e5).toISOString().slice(0,10);
+    const r=await fetch(`${FINMIND}?dataset=TaiwanStockPrice&data_id=${encodeURIComponent(code)}&start_date=${start}`,{cache:"no-store"});
+    const j=await r.json(); const data=(j.data||[]).filter(d=>d.close>0);
+    md.querySelector("#cBody").innerHTML = data.length ? sparkSVG(data) : "查無股價資料（ETF/個股皆應有，或請稍後再試）";
+  }catch(e){ md.querySelector("#cBody").textContent="載入失敗："+e.message; }
+}
+function sparkSVG(data){
+  const W=520,H=220,pad=34,n=data.length;
+  const xs=data.map(d=>d.close), min=Math.min(...xs), max=Math.max(...xs);
+  const x=i=> pad + (n<2?0:i/(n-1))*(W-pad*2);
+  const y=v=> H-pad - (max===min?0.5:(v-min)/(max-min))*(H-pad*2);
+  const pts=data.map((d,i)=>`${x(i).toFixed(1)},${y(d.close).toFixed(1)}`).join(" ");
+  const last=data[n-1].close, up=last>=data[0].close, col=up?"var(--up)":"var(--down)";
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">
+    <polyline fill="none" stroke="${col}" stroke-width="2" points="${pts}"/>
+    <text x="4" y="14" fill="var(--sub)" font-size="11">${fmt(max)}</text>
+    <text x="4" y="${H-pad+4}" fill="var(--sub)" font-size="11">${fmt(min)}</text>
+    <text x="${W-4}" y="14" fill="${col}" font-size="14" text-anchor="end">${fmt(last)}</text>
+    <text x="${pad}" y="${H-4}" fill="var(--sub)" font-size="10">${data[0].date.slice(5)}</text>
+    <text x="${W-pad}" y="${H-4}" fill="var(--sub)" font-size="10" text-anchor="end">${data[n-1].date.slice(5)}</text>
+  </svg>`;
+}
+
+// ── 各年度現金股利（依當年實際持股）──
+function renderYearOverview(){
+  const wrap=document.getElementById("yearWrap"), bars=document.getElementById("yearBars");
+  const byYear={};
+  watch.forEach(w=>{ const l=divData[w.code]; if(!l) return;
+    l.forEach(d=>{ if(d.kind!=="cash"||!d.ex) return; const sh=sharesAt(w,d.ex); if(sh>0){ const yr=d.ex.slice(0,4); byYear[yr]=(byYear[yr]||0)+d.per*sh; } });
+  });
+  const years=Object.keys(byYear).sort();
+  if(!years.length){ wrap.classList.add("hidden"); bars.innerHTML=""; return; }
+  const maxV=Math.max(...years.map(y=>byYear[y]));
+  wrap.classList.remove("hidden");
+  bars.innerHTML=years.map(y=>`<div class="ybar"><span class="yl">${y}</span><span class="yt"><span class="yf" style="width:${(byYear[y]/maxV*100).toFixed(1)}%"></span></span><span class="yv priv">${fmt(byYear[y],0)} 元</span></div>`).join("");
 }
 
 function renderSummary(byCode){
@@ -350,28 +469,26 @@ function renderSummary(byCode){
 
 function renderTable(byCode){
   const tb = document.getElementById("tbody");
-  if(document.activeElement && document.activeElement.classList.contains("hold")) return;
   tb.innerHTML = watch.map(w => {
     const m = byCode[w.code];
-    const qv = w.qty!=null ? w.qty : "";
-    const cv = w.cost!=null ? w.cost : "";
-    const holdCells = `
-      <td><input class="hold priv" type="number" min="0" step="1" data-code="${w.code}" data-f="qty" value="${qv}" placeholder="—"></td>
-      <td><input class="hold priv" type="number" min="0" step="0.01" data-code="${w.code}" data-f="cost" value="${cv}" placeholder="—"></td>`;
+    const sh = curShares(w), ct = avgCost(w);
+    const shCell = `<td class="priv">${sh?sh.toLocaleString():'<span class="flat">—</span>'}</td>`;
+    const ctCell = `<td class="priv">${ct?fmt(ct):'<span class="flat">—</span>'}</td>`;
+    const btns = `<button class="mini ed" data-code="${w.code}" title="編輯交易">✎</button> <button class="mini chart" data-code="${w.code}" title="走勢圖">📈</button>`;
     if(!m) return `<tr draggable="true" data-code="${w.code}">
-      <td class="name">⠿ ${w.code} <span class="code">查無資料</span></td>
+      <td class="name">⠿ ${w.code} <span class="code">查無資料</span> ${btns}</td>
       <td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
-      ${holdCells}<td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
+      ${shCell}${ctCell}<td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
       <td class="flat">—</td><td class="flat">—</td><td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
       <td><button class="del" data-code="${w.code}">✕</button></td></tr>`;
     const d = calc(m, w);
     const yld = divCashTTM(m.c), yPct = (yld>0 && d.price) ? yld/d.price*100 : null;
     return `<tr draggable="true" data-code="${m.c}">
-      <td class="name">⠿ <b>${m.n||""}</b> <span class="code">${m.c}</span></td>
+      <td class="name">⠿ <b>${m.n||""}</b> <span class="code">${m.c}</span> ${btns}</td>
       <td class="px ${d.cls}">${fmt(d.price)}</td>
       <td class="${d.cls}">${d.sign} ${d.diff===null?"—":fmt(Math.abs(d.diff))}</td>
       <td class="${d.cls}">${d.pct===null?"—":fmt(Math.abs(d.pct))+"%"}</td>
-      ${holdCells}
+      ${shCell}${ctCell}
       <td class="priv ${d.hasHold?clsOf(d.pl):'flat'}">${d.hasHold?signOf(d.pl)+" "+fmt(Math.abs(d.pl),0):"—"}</td>
       <td class="priv ${d.hasHold?clsOf(d.pl):'flat'}">${d.hasHold?signOf(d.pl)+fmt(Math.abs(d.plPct))+"%":"—"}</td>
       <td class="${yPct===null?'flat':''}">${yPct===null?"—":fmt(yPct,2)+"%"}</td>
@@ -381,18 +498,9 @@ function renderTable(byCode){
     </tr>`;
   }).join("");
   tb.querySelectorAll(".del").forEach(b => b.onclick = () => removeCode(b.dataset.code));
-  tb.querySelectorAll("input.hold").forEach(inp => {
-    inp.onchange = () => setHold(inp.dataset.code, inp.dataset.f, inp.value);
-    inp.onkeydown = e => { if(e.key==="Enter") inp.blur(); };
-  });
+  tb.querySelectorAll(".ed").forEach(b => b.onclick = ev => { ev.stopPropagation(); openLots(b.dataset.code); });
+  tb.querySelectorAll(".chart").forEach(b => b.onclick = ev => { ev.stopPropagation(); openChart(b.dataset.code); });
   enableDrag(tb, "tr");
-}
-
-function setHold(code, field, value){
-  const w = watch.find(x=>x.code===code); if(!w) return;
-  const n = parseFloat(value);
-  w[field] = (value==="" || isNaN(n)) ? null : n;
-  save(); render();
 }
 
 function renderCards(byCode){
@@ -427,7 +535,7 @@ function enableDrag(container, sel){
   container.querySelectorAll(sel).forEach(el => {
     el.style.cursor = "grab";
     el.ondragstart = e => {
-      if(e.target.classList && e.target.classList.contains("hold")){ e.preventDefault(); return; }
+      if(e.target.tagName==="BUTTON" || e.target.tagName==="INPUT"){ e.preventDefault(); return; }
       dragCode = el.dataset.code; e.dataTransfer.effectAllowed="move"; el.style.opacity=".4";
     };
     el.ondragend = () => { el.style.opacity="1"; dragCode=null; };
@@ -549,7 +657,6 @@ function renderDivPage(){
   const rows=[];
   watch.forEach(w => {
     const list = divData[w.code];
-    const qty = num0(w.qty);
     const name = nameMap[w.code] || "";
     const nameCell = `<td class="name"><b>${name}</b> <span class="code">${w.code}</span></td>`;
     if(!list){ rows.push(`<tr>${nameCell}<td colspan="6" class="flat">查無（尚未同步或無資料）</td></tr>`); return; }
@@ -557,16 +664,17 @@ function renderDivPage(){
                     .sort((a,b)=> a.ex<b.ex ? -1 : 1);
     if(!inR.length){ rows.push(`<tr>${nameCell}<td colspan="6" class="flat">區間內無除權息</td></tr>`); return; }
     let stCash=0, stShares=0;
-    const detail = inR.map(d => {              // 該檔每筆明細
+    const detail = inR.map(d => {              // 每筆依「該除權息日當下持股」計算
+      const shAt = sharesAt(w, d.ex);
       let typeTxt, perTxt, recTxt;
       if(d.kind==="cash"){
-        const got = d.per * qty; stCash += got;
+        const got = d.per * shAt; stCash += got;
         typeTxt = "現金"; perTxt = `現金 ${fmt(d.per,3)}`;
-        recTxt = qty ? `<span class="priv up">${fmt(got,0)} 元</span>` : '<span class="flat">未填股數</span>';
+        recTxt = shAt>0 ? `<span class="priv up">${fmt(got,0)} 元</span>` : '<span class="flat">當時未持有</span>';
       }else{
-        const shares = qty * d.per / 10; stShares += shares;
+        const shares = shAt * d.per / 10; stShares += shares;
         typeTxt = "股票"; perTxt = `股票 ${fmt(d.per,3)}`;
-        recTxt = qty ? `<span class="priv up">${fmt(shares,0)} 股</span>` : '<span class="flat">未填股數</span>';
+        recTxt = shAt>0 ? `<span class="priv up">${fmt(shares,0)} 股</span>` : '<span class="flat">當時未持有</span>';
       }
       return `<tr class="drow" data-g="${w.code}">
         <td class="name"></td>
@@ -574,7 +682,7 @@ function renderDivPage(){
         <td class="name code">${d.ex}</td>
         <td class="name code">${d.pay||"—"}</td>
         <td>${perTxt}</td>
-        <td class="priv">${qty?qty.toLocaleString():"—"}</td>
+        <td class="priv">${shAt>0?shAt.toLocaleString():"—"}</td>
         <td class="recv">${recTxt}</td>
       </tr>`;
     }).join("");
@@ -582,16 +690,17 @@ function renderDivPage(){
     const parts=[];
     if(stCash)   parts.push(`<span class="priv up">${fmt(stCash,0)} 元</span>`);
     if(stShares) parts.push(`<span class="priv up">${fmt(stShares,0)} 股</span>`);
-    const subTxt = parts.length ? parts.join("　") : (qty ? '0' : '<span class="flat">未填股數</span>');
+    const subTxt = parts.length ? parts.join("　") : '<span class="flat">當時未持有/未填交易</span>';
     rows.push(`<tr class="dhead" data-g="${w.code}">
       <td class="name"><span class="arrow">▸</span> <b>${name}</b> <span class="code">${w.code}</span></td>
       <td colspan="3" class="code">${inR.length} 筆</td>
       <td></td>
-      <td class="priv">${qty?qty.toLocaleString():"—"}</td>
+      <td class="priv">${curShares(w)?curShares(w).toLocaleString():"—"}</td>
       <td>${subTxt}</td>
     </tr>`);
     rows.push(detail);
   });
+  renderYearOverview();
   body.innerHTML = rows.join("");
   body.querySelectorAll("tr.dhead").forEach(h => h.onclick = () => {
     const g = h.dataset.g;
