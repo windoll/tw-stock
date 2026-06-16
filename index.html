@@ -70,6 +70,14 @@
   .daterow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
   .daterow input[type=date]{flex:none;min-width:0;width:auto}
   .daterow label{color:var(--sub);font-size:13px}
+  tr.dhead{cursor:pointer}
+  tr.dhead:hover{background:var(--card)}
+  tr.dhead td{font-weight:600}
+  tr.dhead .arrow{display:inline-block;width:14px;color:var(--sub)}
+  tr.drow{display:none}
+  tr.drow.show{display:table-row}
+  tr.drow td{color:var(--sub)}
+  tr.drow td.recv{color:var(--txt)}
 </style>
 </head>
 <body>
@@ -452,33 +460,49 @@ function renderDivPage(){
     const inR = list.filter(d => d.ex && (!s||d.ex>=s) && (!e||d.ex<=e))
                     .sort((a,b)=> a.ex<b.ex ? -1 : 1);
     if(!inR.length){ rows.push(`<tr>${nameCell}<td colspan="6" class="flat">區間內無除權息</td></tr>`); return; }
-    inR.forEach(d => {                         // 同股票多筆、現金/股票分開列
+    let stCash=0, stShares=0;
+    const detail = inR.map(d => {              // 該檔每筆明細
       let typeTxt, perTxt, recTxt;
       if(d.kind==="cash"){
-        const got = d.per * qty;
-        if(got) totalCash += got;
-        typeTxt = "現金";
-        perTxt = `現金 ${fmt(d.per)}`;
+        const got = d.per * qty; stCash += got;
+        typeTxt = "現金"; perTxt = `現金 ${fmt(d.per,3)}`;
         recTxt = qty ? `<span class="priv up">${fmt(got,0)} 元</span>` : '<span class="flat">未填股數</span>';
       }else{
-        const shares = qty * d.per / 10;       // 股票股利 X元/股 = X/10 股
-        if(shares) totalShares += shares;
-        typeTxt = "股票";
-        perTxt = `股票 ${fmt(d.per)}`;
+        const shares = qty * d.per / 10; stShares += shares;
+        typeTxt = "股票"; perTxt = `股票 ${fmt(d.per,3)}`;
         recTxt = qty ? `<span class="priv up">${fmt(shares,0)} 股</span>` : '<span class="flat">未填股數</span>';
       }
-      rows.push(`<tr>
-        ${nameCell}
+      return `<tr class="drow" data-g="${w.code}">
+        <td class="name"></td>
         <td>${typeTxt}</td>
         <td class="name code">${d.ex}</td>
         <td class="name code">${d.pay||"—"}</td>
         <td>${perTxt}</td>
         <td class="priv">${qty?qty.toLocaleString():"—"}</td>
-        <td>${recTxt}</td>
-      </tr>`);
-    });
+        <td class="recv">${recTxt}</td>
+      </tr>`;
+    }).join("");
+    totalCash += stCash; totalShares += stShares;
+    const parts=[];
+    if(stCash)   parts.push(`<span class="priv up">${fmt(stCash,0)} 元</span>`);
+    if(stShares) parts.push(`<span class="priv up">${fmt(stShares,0)} 股</span>`);
+    const subTxt = parts.length ? parts.join("　") : (qty ? '0' : '<span class="flat">未填股數</span>');
+    rows.push(`<tr class="dhead" data-g="${w.code}">
+      <td class="name"><span class="arrow">▸</span> <b>${name}</b> <span class="code">${w.code}</span></td>
+      <td colspan="3" class="code">${inR.length} 筆</td>
+      <td></td>
+      <td class="priv">${qty?qty.toLocaleString():"—"}</td>
+      <td>${subTxt}</td>
+    </tr>`);
+    rows.push(detail);
   });
   body.innerHTML = rows.join("");
+  body.querySelectorAll("tr.dhead").forEach(h => h.onclick = () => {
+    const g = h.dataset.g;
+    const open = h.classList.toggle("open");
+    h.querySelector(".arrow").textContent = open ? "▾" : "▸";
+    body.querySelectorAll(`tr.drow[data-g="${g}"]`).forEach(r => r.classList.toggle("show", open));
+  });
   sum.classList.remove("hidden");
   sum.innerHTML = `<span class="lbl">區間 ${s||"—"} ~ ${e||"—"}（依除權息日）</span>
     <span><span class="lbl">現金股利合計</span> <b class="priv up">${fmt(totalCash,0)} 元</b></span>
