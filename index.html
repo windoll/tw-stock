@@ -78,6 +78,14 @@
   tr.drow.show{display:table-row}
   tr.drow td{color:var(--sub)}
   tr.drow td.recv{color:var(--txt)}
+  .idxbar{display:flex;gap:18px;flex-wrap:wrap;font-size:14px;color:var(--sub);margin-bottom:14px}
+  .idxbar .lbl{color:var(--sub)} .idxbar b{color:var(--txt);font-size:15px}
+  .alert{background:#2a2410;border:1px solid #5a4a1a;color:#f7d774;border-radius:8px;padding:8px 12px;font-size:13px;margin-bottom:14px}
+  .pie{display:flex;gap:18px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px;flex-wrap:wrap}
+  .pieC{width:120px;height:120px;border-radius:50%;flex:none}
+  .legwrap{display:flex;flex-direction:column;gap:4px;font-size:13px}
+  .leg{display:flex;align-items:center;gap:6px}
+  .dotc{width:10px;height:10px;border-radius:2px;display:inline-block}
 </style>
 </head>
 <body>
@@ -91,6 +99,8 @@
       <button id="eyeBtn" class="ghost" title="隱藏／顯示獲利資訊">👁</button>
     </div>
   </div>
+
+  <div id="indexBar" class="idxbar">—</div>
 
   <!-- ───── 報價頁 ───── -->
   <div id="page-quotes">
@@ -115,10 +125,15 @@
     <div class="bar">
       <input id="codeInput" placeholder="股票代號，例：2330（上市）/ 6488（上櫃）" autocomplete="off">
       <button id="addBtn">加入</button>
+      <button id="exportBtn" class="ghost" title="備份自選與持股">匯出</button>
+      <button id="importBtn" class="ghost" title="還原備份">匯入</button>
+      <input type="file" id="importFile" accept=".json,application/json" style="display:none">
     </div>
     <div class="err" id="err"></div>
 
+    <div id="divAlert" class="alert hidden"></div>
     <div class="summary hidden" id="summary"></div>
+    <div id="pieWrap" class="pie hidden"></div>
 
     <div class="tablewrap">
     <table id="tableView">
@@ -126,7 +141,7 @@
         <tr>
           <th class="name">名稱</th>
           <th>成交</th><th>漲跌</th><th>幅度</th>
-          <th>股數</th><th>買價</th><th>損益</th><th>報酬率</th>
+          <th>股數</th><th>買價</th><th>損益</th><th>報酬率</th><th>殖利率</th>
           <th>開</th><th>高</th><th>低</th><th>昨收</th><th>量</th><th></th>
         </tr>
       </thead>
@@ -240,26 +255,97 @@ function render(rows){
   lastRows.forEach(m => { byCode[m.c] = m; if(m.n) nameMap[m.c] = m.n; });
   if(view==="table") renderTable(byCode); else renderCards(byCode);
   renderSummary(byCode);
+  renderPie(byCode);
+  renderAlert();
+}
+
+function renderPie(byCode){
+  const wrap = document.getElementById("pieWrap");
+  const items = [];
+  watch.forEach(w => { const m=byCode[w.code]; if(!m) return; const d=calc(m,w); if(d.hasHold) items.push({name:nameMap[w.code]||w.code, val:d.price*d.qty}); });
+  if(items.length < 1){ wrap.classList.add("hidden"); wrap.innerHTML=""; return; }
+  const total = items.reduce((a,x)=>a+x.val,0);
+  items.sort((a,b)=>b.val-a.val);
+  const colors=["#4f8cff","#ff5252","#26c281","#f7b955","#a06bff","#28c0c0","#ff8a65","#9aa0ad","#e066a6","#6ab04c"];
+  let acc=0; const segs=items.map((x,i)=>{ const a=acc/total*360; acc+=x.val; return `${colors[i%colors.length]} ${a}deg ${acc/total*360}deg`; });
+  const legend=items.map((x,i)=>`<div class="leg"><span class="dotc" style="background:${colors[i%colors.length]}"></span>${x.name} <span class="priv">${(x.val/total*100).toFixed(1)}%</span></div>`).join("");
+  wrap.classList.remove("hidden");
+  wrap.innerHTML=`<div class="pieC" style="background:conic-gradient(${segs.join(",")})"></div><div class="legwrap">${legend}</div>`;
+}
+
+function renderAlert(){
+  const box = document.getElementById("divAlert");
+  const today = new Date().toISOString().slice(0,10);
+  const plus  = new Date(Date.now()+14*864e5).toISOString().slice(0,10);
+  const items=[];
+  watch.forEach(w => { const l=divData[w.code]; if(!l) return;
+    l.forEach(d => { if(d.ex>=today && d.ex<=plus) items.push(`${nameMap[w.code]||w.code}(${w.code}) ${d.ex} ${d.kind==="cash"?"除息":"除權"}`); });
+  });
+  if(!items.length){ box.classList.add("hidden"); box.innerHTML=""; return; }
+  box.classList.remove("hidden");
+  box.innerHTML = "🔔 近 14 天除權息：" + items.join("　•　");
+}
+
+function renderIndex(arr){
+  const bar = document.getElementById("indexBar");
+  if(!arr || !arr.length) return;
+  bar.innerHTML = arr.map(m => {
+    const z=num(m.z), y=num(m.y);
+    const diff=(z!==null&&y!==null)?z-y:null, pct=(diff!==null&&y)?diff/y*100:null, cls=clsOf(diff);
+    const nm = m.n==="發行量加權股價指數"?"加權指數" : m.n==="櫃買指數"?"櫃買指數" : (m.n||m.ch);
+    return `<span class="idx"><span class="lbl">${nm}</span> <b class="${cls}">${z===null?"—":fmt(z)}</b> <span class="${cls}">${diff===null?"":signOf(diff)+fmt(Math.abs(diff))+" ("+fmt(Math.abs(pct))+"%)"}</span></span>`;
+  }).join("");
+}
+
+async function fetchIndices(){
+  try{
+    const url=`https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_t00.tw|otc_o00.tw&json=1&delay=0&_=${Date.now()}`;
+    const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(),8000);
+    try{ renderIndex(await Promise.any(PROXIES.map(w=>fetchVia(w,url,ctrl.signal)))); }
+    finally{ clearTimeout(t); ctrl.abort(); }
+  }catch(e){}
+}
+
+function exportData(){
+  const blob = new Blob([JSON.stringify({watch, view, exportedAt:new Date().toISOString()},null,2)], {type:"application/json"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download="tw-stock-backup.json"; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+function importData(file){
+  const rd=new FileReader();
+  rd.onload=()=>{ try{ const j=JSON.parse(rd.result);
+      if(!Array.isArray(j.watch)) throw new Error("缺少 watch");
+      watch=j.watch; if(j.view) view=j.view; save(); setView(view); refresh();
+      alert("匯入完成，共 "+watch.length+" 檔");
+    }catch(e){ alert("匯入失敗："+e.message); } };
+  rd.readAsText(file);
 }
 
 function renderSummary(byCode){
   const box = document.getElementById("summary");
-  let totalCost=0, totalVal=0, any=false;
+  let totalCost=0, totalVal=0, totalDiv=0, any=false;
   watch.forEach(w => {
     const m = byCode[w.code]; if(!m) return;
     const d = calc(m, w);
-    if(d.hasHold){ any=true; totalCost += d.cost*d.qty; totalVal += d.price*d.qty; }
+    if(d.hasHold){ any=true; totalCost += d.cost*d.qty; totalVal += d.price*d.qty; totalDiv += divCashTTM(w.code)*d.qty; }
   });
   if(!any){ box.classList.add("hidden"); box.innerHTML=""; return; }
   box.classList.remove("hidden");
   const pl = totalVal - totalCost;
   const plPct = totalCost ? pl/totalCost*100 : null;
   const cls = clsOf(pl);
+  const plTot = pl + totalDiv;                 // 含息損益
+  const plTotPct = totalCost ? plTot/totalCost*100 : null;
+  const clsT = clsOf(plTot);
+  const incLine = totalDiv>0 ? `
+    <span><span class="lbl">含息損益</span> <b class="priv ${clsT}">${signOf(plTot)} ${fmt(Math.abs(plTot),0)}</b>
+      <span class="priv ${clsT}">(${plTotPct===null?"—":signOf(plTot)+fmt(Math.abs(plTotPct))+"%"})</span></span>` : "";
   box.innerHTML = `
     <span><span class="lbl">總成本</span> <span class="priv">${fmt(totalCost,0)}</span></span>
     <span><span class="lbl">總市值</span> <span class="priv">${fmt(totalVal,0)}</span></span>
     <span><span class="lbl">總損益</span> <b class="priv ${cls}">${signOf(pl)} ${fmt(Math.abs(pl),0)}</b>
-      <span class="priv ${cls}">(${plPct===null?"—":signOf(pl)+fmt(Math.abs(plPct))+"%"})</span></span>`;
+      <span class="priv ${cls}">(${plPct===null?"—":signOf(pl)+fmt(Math.abs(plPct))+"%"})</span></span>
+    ${incLine}`;
 }
 
 function renderTable(byCode){
@@ -275,10 +361,11 @@ function renderTable(byCode){
     if(!m) return `<tr draggable="true" data-code="${w.code}">
       <td class="name">⠿ ${w.code} <span class="code">查無資料</span></td>
       <td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
-      ${holdCells}<td class="flat">—</td><td class="flat">—</td>
+      ${holdCells}<td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
       <td class="flat">—</td><td class="flat">—</td><td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
       <td><button class="del" data-code="${w.code}">✕</button></td></tr>`;
     const d = calc(m, w);
+    const yld = divCashTTM(m.c), yPct = (yld>0 && d.price) ? yld/d.price*100 : null;
     return `<tr draggable="true" data-code="${m.c}">
       <td class="name">⠿ <b>${m.n||""}</b> <span class="code">${m.c}</span></td>
       <td class="px ${d.cls}">${fmt(d.price)}</td>
@@ -287,6 +374,7 @@ function renderTable(byCode){
       ${holdCells}
       <td class="priv ${d.hasHold?clsOf(d.pl):'flat'}">${d.hasHold?signOf(d.pl)+" "+fmt(Math.abs(d.pl),0):"—"}</td>
       <td class="priv ${d.hasHold?clsOf(d.pl):'flat'}">${d.hasHold?signOf(d.pl)+fmt(Math.abs(d.plPct))+"%":"—"}</td>
+      <td class="${yPct===null?'flat':''}">${yPct===null?"—":fmt(yPct,2)+"%"}</td>
       <td>${fmt(num(m.o))}</td><td>${fmt(num(m.h))}</td><td>${fmt(num(m.l))}</td>
       <td>${fmt(d.y)}</td><td>${d.vol===null?"—":d.vol.toLocaleString()}</td>
       <td><button class="del" data-code="${m.c}">✕</button></td>
@@ -373,6 +461,7 @@ async function refresh(){
   try{
     const rows = await fetchQuotes(watch.map(w=>w.code));
     render(rows);
+    fetchIndices();
     document.getElementById("updated").textContent = "最後更新 " + new Date().toLocaleTimeString("zh-TW");
     document.getElementById("err").textContent = "";
     setStatus("已連線", false);
@@ -407,8 +496,15 @@ function setupTimer(){
 // ───── 股利（FinMind，含 ETF＋個股、有歷史、真正除息日，可指定區間）─────
 const FINMIND = "https://api.finmindtrade.com/api/v4/data";
 const DIV_FROM = "2023-01-01";   // 抓此日起的歷史，渲染時再依使用者區間篩選
-let divData = {};   // code -> [{ex, pay, cash}]
+let divData = {};   // code -> [{kind, ex, pay, per}]
 let nameMap = {};   // code -> 名稱（取自報價）
+
+// 近一年現金股利合計（元/股），供殖利率與含息報酬使用
+function divCashTTM(code){
+  const list = divData[code]; if(!list) return 0;
+  const cut = new Date(Date.now()-365*864e5).toISOString().slice(0,10);
+  return list.filter(d => d.kind==="cash" && d.ex>=cut).reduce((a,d)=>a+d.per, 0);
+}
 
 async function syncDividends(){
   const st = document.getElementById("divStatus");
@@ -533,6 +629,9 @@ document.getElementById("syncBtn").onclick = syncDividends;
 document.getElementById("divStart").addEventListener("change", renderDivPage);
 document.getElementById("divEnd").addEventListener("change", renderDivPage);
 document.getElementById("eyeBtn").onclick = () => setPrivacy(!document.body.classList.contains("hideprivate"));
+document.getElementById("exportBtn").onclick = exportData;
+document.getElementById("importBtn").onclick = () => document.getElementById("importFile").click();
+document.getElementById("importFile").onchange = e => { if(e.target.files[0]) importData(e.target.files[0]); e.target.value=""; };
 
 // 日期預設：2026/01/01 ~ 今天（每次開啟取當天）
 (function initDates(){
@@ -546,7 +645,7 @@ document.getElementById("eyeBtn").onclick = () => setPrivacy(!document.body.clas
 try{ divData = JSON.parse(localStorage.getItem(LS_DIV)) || {}; }catch(e){ divData = {}; }
 
 setPrivacy(localStorage.getItem(LS_PRIV)==="1");
-setView(view); refresh(); setupTimer();
+setView(view); refresh(); setupTimer(); fetchIndices();
 </script>
 </body>
 </html>
