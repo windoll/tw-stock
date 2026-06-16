@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>台股即時報價</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#1a1d24; --line:#2a2e38; --txt:#e6e8ee;
+    --sub:#8b909c; --up:#ff5252; --down:#26c281; --flat:#9aa0ad; --accent:#4f8cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"Segoe UI","Microsoft JhengHei",sans-serif;
+    background:var(--bg);color:var(--txt);padding:20px;max-width:880px;margin:0 auto}
+  h1{font-size:20px;margin:0 0 4px}
+  .meta{color:var(--sub);font-size:13px;margin-bottom:16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .bar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+  input,select,button{font-size:15px;padding:10px 12px;border-radius:8px;border:1px solid var(--line);
+    background:var(--card);color:var(--txt);outline:none}
+  input{flex:1;min-width:160px}
+  button{cursor:pointer;background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button.ghost{background:var(--card);color:var(--txt);border-color:var(--line);font-weight:400}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{padding:10px 8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--sub);font-weight:500;font-size:12px}
+  td.name,th.name{text-align:left}
+  .code{color:var(--sub);font-size:12px}
+  .px{font-weight:700;font-size:16px}
+  .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--flat)}
+  .del{cursor:pointer;color:var(--sub);background:none;border:none;font-size:16px;padding:4px 8px}
+  .empty{color:var(--sub);text-align:center;padding:40px 0}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--down);display:inline-block}
+  .err{color:var(--up);font-size:13px;margin-top:8px;min-height:18px}
+</style>
+</head>
+<body>
+  <h1>台股即時報價</h1>
+  <div class="meta">
+    <span><span class="dot" id="dot"></span> <span id="status">就緒</span></span>
+    <span>更新間隔
+      <select id="interval">
+        <option value="10">10 秒</option>
+        <option value="30">30 秒</option>
+        <option value="60" selected>60 秒</option>
+        <option value="0">不自動</option>
+      </select>
+    </span>
+    <span id="updated"></span>
+  </div>
+
+  <div class="bar">
+    <input id="codeInput" placeholder="輸入股票代號，例：2330（上市）或 6488（上櫃）" autocomplete="off">
+    <button id="addBtn">加入</button>
+    <button id="refreshBtn" class="ghost">立即更新</button>
+  </div>
+  <div class="err" id="err"></div>
+
+  <table>
+    <thead>
+      <tr>
+        <th class="name">名稱</th>
+        <th>成交</th><th>漲跌</th><th>幅度</th>
+        <th>開</th><th>高</th><th>低</th><th>昨收</th><th>量</th><th></th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <div class="empty" id="empty">尚未加入任何股票，請於上方輸入代號。</div>
+
+<script>
+const LS_KEY = "tw_watchlist_v1";
+let watch = load();          // [{code, market}] market: 'tse'|'otc'|'auto'
+let timer = null;
+
+function load(){ try{ return JSON.parse(localStorage.getItem(LS_KEY))||[] }catch(e){ return [] } }
+function save(){ localStorage.setItem(LS_KEY, JSON.stringify(watch)); }
+
+// 經 CORS proxy 抓 TWSE 即時報價（純前端無法直連 mis.twse）
+const PROXIES = [
+  u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u),
+  u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
+];
+
+async function fetchQuotes(codes){
+  if(!codes.length) return [];
+  // 同時查上市與上櫃，存在者才會回傳
+  const exch = codes.map(c => `tse_${c}.tw|otc_${c}.tw`).join("|");
+  const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${exch}&json=1&delay=0&_=${Date.now()}`;
+  let lastErr;
+  for(const wrap of PROXIES){
+    try{
+      const r = await fetch(wrap(url), {cache:"no-store"});
+      if(!r.ok) throw new Error("HTTP "+r.status);
+      const data = await r.json();
+      if(data && data.msgArray) return data.msgArray;
+      throw new Error("無資料");
+    }catch(e){ lastErr = e; }
+  }
+  throw lastErr || new Error("抓取失敗");
+}
+
+function num(v){ const n = parseFloat(v); return isNaN(n) ? null : n; }
+function pickPrice(m){
+  let p = num(m.z);                       // 成交價
+  if(p===null){ const a = (m.a||"").split("_")[0]; p = num(a); }   // 退而求其次：賣一
+  if(p===null){ const b = (m.b||"").split("_")[0]; p = num(b); }   // 買一
+  if(p===null) p = num(m.y);              // 昨收
+  return p;
+}
+function fmt(n,d=2){ return n===null||n===undefined ? "—" : Number(n).toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d}); }
+
+function render(rows){
+  const tb = document.getElementById("tbody");
+  document.getElementById("empty").style.display = watch.length ? "none":"block";
+  const byCode = {};
+  rows.forEach(m => { byCode[m.c] = m; });
+  tb.innerHTML = watch.map(w => {
+    const m = byCode[w.code];
+    if(!m) return `<tr><td class="name">${w.code} <span class="code">查無資料</span></td>
+      <td colspan="8" class="flat">—</td>
+      <td><button class="del" data-code="${w.code}">✕</button></td></tr>`;
+    const price = pickPrice(m);
+    const y = num(m.y);
+    const diff = (price!==null && y!==null) ? price - y : null;
+    const pct  = (diff!==null && y) ? diff / y * 100 : null;
+    const cls = diff===null||diff===0 ? "flat" : (diff>0 ? "up":"down");
+    const sign = diff>0 ? "▲":(diff<0?"▼":"");
+    const vol = num(m.v);
+    return `<tr>
+      <td class="name"><b>${m.n||""}</b> <span class="code">${m.c}</span></td>
+      <td class="px ${cls}">${fmt(price)}</td>
+      <td class="${cls}">${sign} ${diff===null?"—":fmt(Math.abs(diff))}</td>
+      <td class="${cls}">${pct===null?"—":fmt(Math.abs(pct))+"%"}</td>
+      <td>${fmt(num(m.o))}</td><td>${fmt(num(m.h))}</td><td>${fmt(num(m.l))}</td>
+      <td>${fmt(y)}</td><td>${vol===null?"—":vol.toLocaleString()}</td>
+      <td><button class="del" data-code="${m.c}">✕</button></td>
+    </tr>`;
+  }).join("");
+  tb.querySelectorAll(".del").forEach(b => b.onclick = () => removeCode(b.dataset.code));
+}
+
+async function refresh(){
+  if(!watch.length){ render([]); return; }
+  setStatus("更新中…", true);
+  try{
+    const rows = await fetchQuotes(watch.map(w=>w.code));
+    render(rows);
+    document.getElementById("updated").textContent = "最後更新 " + new Date().toLocaleTimeString("zh-TW");
+    document.getElementById("err").textContent = "";
+    setStatus("已連線", false);
+  }catch(e){
+    document.getElementById("err").textContent = "更新失敗：" + e.message + "（proxy 或來源暫時無法存取，稍後重試）";
+    setStatus("連線異常", false);
+  }
+}
+
+function setStatus(t, busy){
+  document.getElementById("status").textContent = t;
+  document.getElementById("dot").style.background = busy ? "var(--accent)" : "var(--down)";
+}
+
+function addCode(){
+  const inp = document.getElementById("codeInput");
+  const code = inp.value.trim().toUpperCase();
+  document.getElementById("err").textContent = "";
+  if(!/^[0-9A-Z]{3,6}$/.test(code)){ document.getElementById("err").textContent="代號格式不正確"; return; }
+  if(watch.some(w=>w.code===code)){ document.getElementById("err").textContent="已在清單中"; inp.value=""; return; }
+  watch.push({code}); save(); inp.value=""; refresh();
+}
+function removeCode(code){ watch = watch.filter(w=>w.code!==code); save(); refresh(); }
+
+function setupTimer(){
+  if(timer) clearInterval(timer);
+  const s = parseInt(document.getElementById("interval").value,10);
+  if(s>0) timer = setInterval(refresh, s*1000);
+}
+
+document.getElementById("addBtn").onclick = addCode;
+document.getElementById("refreshBtn").onclick = refresh;
+document.getElementById("codeInput").addEventListener("keydown", e => { if(e.key==="Enter") addCode(); });
+document.getElementById("interval").addEventListener("change", setupTimer);
+
+render([]); refresh(); setupTimer();
+</script>
+</body>
+</html>
