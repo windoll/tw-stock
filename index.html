@@ -100,6 +100,16 @@
   .ybar .yt{flex:1;background:var(--line);border-radius:4px;height:18px;overflow:hidden;display:block}
   .ybar .yf{display:block;height:100%;background:var(--accent);border-radius:4px;min-width:2px}
   .ybar .yv{width:110px;text-align:right}
+  /* 欄位自訂隱藏 */
+  body.hcol-cost .col-cost,body.hcol-yield .col-yield,body.hcol-o .col-o,body.hcol-h .col-h,body.hcol-l .col-l,body.hcol-yc .col-yc,body.hcol-vol .col-vol{display:none}
+  /* 手機精簡：自動隱藏次要欄位 */
+  @media(max-width:600px){
+    body{padding:12px}
+    .col-o,.col-h,.col-l,.col-yc,.col-vol,.col-yield{display:none}
+    .idxbar{font-size:12px;gap:10px}
+    h1{font-size:18px}
+    th,td{padding:8px 6px}
+  }
 </style>
 </head>
 <body>
@@ -137,8 +147,10 @@
     </div>
 
     <div class="bar">
-      <input id="codeInput" placeholder="股票代號，例：2330（上市）/ 6488（上櫃）" autocomplete="off">
+      <input id="codeInput" list="stockList" placeholder="輸入代號或名稱，例：2330 或 台積電" autocomplete="off">
+      <datalist id="stockList"></datalist>
       <button id="addBtn">加入</button>
+      <button id="colBtn" class="ghost" title="自訂欄位">欄位</button>
       <button id="exportBtn" class="ghost" title="備份自選與持股">匯出</button>
       <button id="importBtn" class="ghost" title="還原備份">匯入</button>
       <input type="file" id="importFile" accept=".json,application/json" style="display:none">
@@ -155,8 +167,8 @@
         <tr>
           <th class="name">名稱</th>
           <th>成交</th><th>漲跌</th><th>幅度</th>
-          <th>股數</th><th>買價</th><th>損益</th><th>報酬率</th><th>殖利率</th>
-          <th>開</th><th>高</th><th>低</th><th>昨收</th><th>量</th><th></th>
+          <th>股數</th><th class="col-cost">買價</th><th>損益</th><th>報酬率</th><th class="col-yield">殖利率</th>
+          <th class="col-o">開</th><th class="col-h">高</th><th class="col-l">低</th><th class="col-yc">昨收</th><th class="col-vol">量</th><th></th>
         </tr>
       </thead>
       <tbody id="tbody"></tbody>
@@ -229,6 +241,29 @@ function lotsOf(w){ return Array.isArray(w.lots)?w.lots:[]; }
 function curShares(w){ return lotsOf(w).reduce((a,l)=> a + (l.type==="sell"?-1:1)*(parseFloat(l.shares)||0), 0); }
 function avgCost(w){ let s=0,c=0; lotsOf(w).forEach(l=>{ if(l.type!=="sell"){ const sh=parseFloat(l.shares)||0,p=parseFloat(l.price)||0; s+=sh; c+=sh*p; } }); return s>0?c/s:0; }
 function sharesAt(w, iso){ return lotsOf(w).reduce((a,l)=> (!l.date||l.date<=iso) ? a+(l.type==="sell"?-1:1)*(parseFloat(l.shares)||0) : a, 0); }
+
+// 股票清單（名稱搜尋用）
+let codeName={}, nameToCode={};
+async function loadStockList(){
+  try{
+    let arr; const cached = JSON.parse(localStorage.getItem("tw_stocklist")||"null");
+    if(cached && Date.now()-cached.t < 7*864e5) arr = cached.d;
+    else{ const r=await fetch("https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo",{cache:"no-store"});
+          const j=await r.json(); arr=(j.data||[]).map(x=>[x.stock_id,x.stock_name]);
+          localStorage.setItem("tw_stocklist", JSON.stringify({t:Date.now(), d:arr})); }
+    const seen=new Set(), opts=[];
+    arr.forEach(([c,n])=>{ if(!c||!n||seen.has(c)) return; seen.add(c); codeName[c]=n; if(!nameToCode[n]) nameToCode[n]=c; opts.push(`<option value="${c} ${n}">`); });
+    const dl=document.getElementById("stockList"); if(dl) dl.innerHTML=opts.join("");
+  }catch(e){}
+}
+function resolveCode(input){
+  const t=input.trim(); if(!t) return "";
+  const first=t.split(/\s+/)[0].toUpperCase();
+  if(/^[0-9A-Z]{3,6}$/.test(first) && (codeName[first] || /^\d/.test(first))) return first;
+  if(nameToCode[t]) return nameToCode[t];
+  const hit=Object.keys(nameToCode).find(n=>n.includes(t));
+  return hit ? nameToCode[hit] : first;
+}
 
 // ───── 即時報價（經 CORS proxy，純前端無法直連 mis.twse）─────
 const PROXIES = [
@@ -446,7 +481,8 @@ function renderSummary(byCode){
   watch.forEach(w => {
     const m = byCode[w.code]; if(!m) return;
     const d = calc(m, w);
-    if(d.hasHold){ any=true; totalCost += d.cost*d.qty; totalVal += d.price*d.qty; totalDiv += divCashTTM(w.code)*d.qty; }
+    if(d.hasHold){ any=true; totalCost += d.cost*d.qty; totalVal += d.price*d.qty; }
+    totalDiv += cashDivReceived(w);   // 實際領到（與年度總覽一致）
   });
   if(!any){ box.classList.add("hidden"); box.innerHTML=""; return; }
   box.classList.remove("hidden");
@@ -473,13 +509,13 @@ function renderTable(byCode){
     const m = byCode[w.code];
     const sh = curShares(w), ct = avgCost(w);
     const shCell = `<td class="priv">${sh?sh.toLocaleString():'<span class="flat">—</span>'}</td>`;
-    const ctCell = `<td class="priv">${ct?fmt(ct):'<span class="flat">—</span>'}</td>`;
+    const ctCell = `<td class="priv col-cost">${ct?fmt(ct):'<span class="flat">—</span>'}</td>`;
     const btns = `<button class="mini ed" data-code="${w.code}" title="編輯交易">✎</button> <button class="mini chart" data-code="${w.code}" title="走勢圖">📈</button>`;
     if(!m) return `<tr draggable="true" data-code="${w.code}">
       <td class="name">⠿ ${w.code} <span class="code">查無資料</span> ${btns}</td>
       <td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
-      ${shCell}${ctCell}<td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
-      <td class="flat">—</td><td class="flat">—</td><td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
+      ${shCell}${ctCell}<td class="flat">—</td><td class="flat">—</td><td class="flat col-yield">—</td>
+      <td class="flat col-o">—</td><td class="flat col-h">—</td><td class="flat col-l">—</td><td class="flat col-yc">—</td><td class="flat col-vol">—</td>
       <td><button class="del" data-code="${w.code}">✕</button></td></tr>`;
     const d = calc(m, w);
     const yld = divCashTTM(m.c), yPct = (yld>0 && d.price) ? yld/d.price*100 : null;
@@ -491,9 +527,9 @@ function renderTable(byCode){
       ${shCell}${ctCell}
       <td class="priv ${d.hasHold?clsOf(d.pl):'flat'}">${d.hasHold?signOf(d.pl)+" "+fmt(Math.abs(d.pl),0):"—"}</td>
       <td class="priv ${d.hasHold?clsOf(d.pl):'flat'}">${d.hasHold?signOf(d.pl)+fmt(Math.abs(d.plPct))+"%":"—"}</td>
-      <td class="${yPct===null?'flat':''}">${yPct===null?"—":fmt(yPct,2)+"%"}</td>
-      <td>${fmt(num(m.o))}</td><td>${fmt(num(m.h))}</td><td>${fmt(num(m.l))}</td>
-      <td>${fmt(d.y)}</td><td>${d.vol===null?"—":d.vol.toLocaleString()}</td>
+      <td class="col-yield ${yPct===null?'flat':''}">${yPct===null?"—":fmt(yPct,2)+"%"}</td>
+      <td class="col-o">${fmt(num(m.o))}</td><td class="col-h">${fmt(num(m.h))}</td><td class="col-l">${fmt(num(m.l))}</td>
+      <td class="col-yc">${fmt(d.y)}</td><td class="col-vol">${d.vol===null?"—":d.vol.toLocaleString()}</td>
       <td><button class="del" data-code="${m.c}">✕</button></td>
     </tr>`;
   }).join("");
@@ -586,9 +622,9 @@ function setStatus(t, busy){
 
 function addCode(){
   const inp = document.getElementById("codeInput");
-  const code = inp.value.trim().toUpperCase();
+  const code = resolveCode(inp.value).toUpperCase();
   document.getElementById("err").textContent = "";
-  if(!/^[0-9A-Z]{3,6}$/.test(code)){ document.getElementById("err").textContent="代號格式不正確"; return; }
+  if(!/^[0-9A-Z]{3,6}$/.test(code)){ document.getElementById("err").textContent="找不到此代號或名稱"; return; }
   if(watch.some(w=>w.code===code)){ document.getElementById("err").textContent="已在清單中"; inp.value=""; return; }
   watch.push({code}); save(); inp.value="";
   render(); refresh();
@@ -607,11 +643,34 @@ const DIV_FROM = "2023-01-01";   // 抓此日起的歷史，渲染時再依使�
 let divData = {};   // code -> [{kind, ex, pay, per}]
 let nameMap = {};   // code -> 名稱（取自報價）
 
-// 近一年現金股利合計（元/股），供殖利率與含息報酬使用
+// 近一年現金股利合計（元/股），殖利率用
 function divCashTTM(code){
   const list = divData[code]; if(!list) return 0;
   const cut = new Date(Date.now()-365*864e5).toISOString().slice(0,10);
   return list.filter(d => d.kind==="cash" && d.ex>=cut).reduce((a,d)=>a+d.per, 0);
+}
+// 實際領到的現金股利（依各除息日當下持股；與「年度總覽」同一套算法）
+function cashDivReceived(w){
+  const l = divData[w.code]; if(!l) return 0;
+  return l.reduce((a,d)=> d.kind==="cash" ? a + d.per*Math.max(0, sharesAt(w, d.ex)) : a, 0);
+}
+
+// 欄位自訂
+const COLS=[["cost","買價"],["yield","殖利率"],["o","開"],["h","高"],["l","低"],["yc","昨收"],["vol","量"]];
+function loadCols(){ try{ return JSON.parse(localStorage.getItem("tw_hcols")||"[]"); }catch(e){ return []; } }
+function applyCols(){ const h=loadCols(); COLS.forEach(([k])=> document.body.classList.toggle("hcol-"+k, h.includes(k))); }
+function openColSettings(){
+  const md=document.getElementById("modal"); const h=loadCols();
+  md.innerHTML=`<div class="modal-box"><button class="x" id="colClose">✕</button><h3>顯示欄位</h3>
+    ${COLS.map(([k,n])=>`<label style="display:block;margin:6px 0;font-size:14px"><input type="checkbox" data-k="${k}" ${h.includes(k)?"":"checked"}> ${n}</label>`).join("")}
+    <div class="note">取消勾選即隱藏該欄；手機會自動精簡顯示。</div></div>`;
+  md.classList.remove("hidden");
+  md.querySelector("#colClose").onclick=closeModal; md.onclick=e=>{ if(e.target===md) closeModal(); };
+  md.querySelectorAll("input[type=checkbox]").forEach(cb=>cb.onchange=()=>{
+    let hid=loadCols(); const k=cb.dataset.k;
+    if(cb.checked) hid=hid.filter(x=>x!==k); else if(!hid.includes(k)) hid.push(k);
+    localStorage.setItem("tw_hcols", JSON.stringify(hid)); applyCols();
+  });
 }
 
 async function syncDividends(){
@@ -741,6 +800,13 @@ document.getElementById("eyeBtn").onclick = () => setPrivacy(!document.body.clas
 document.getElementById("exportBtn").onclick = exportData;
 document.getElementById("importBtn").onclick = () => document.getElementById("importFile").click();
 document.getElementById("importFile").onchange = e => { if(e.target.files[0]) importData(e.target.files[0]); e.target.value=""; };
+document.getElementById("colBtn").onclick = openColSettings;
+
+// 分頁切走時暫停自動更新，回到前景再恢復（省效能與 API 額度）
+document.addEventListener("visibilitychange", () => {
+  if(document.hidden){ if(timer){ clearInterval(timer); timer=null; } }
+  else { refresh(); setupTimer(); }
+});
 
 // 日期預設：2026/01/01 ~ 今天（每次開啟取當天）
 (function initDates(){
@@ -754,7 +820,8 @@ document.getElementById("importFile").onchange = e => { if(e.target.files[0]) im
 try{ divData = JSON.parse(localStorage.getItem(LS_DIV)) || {}; }catch(e){ divData = {}; }
 
 setPrivacy(localStorage.getItem(LS_PRIV)==="1");
-setView(view); refresh(); setupTimer(); fetchIndices();
+applyCols();
+setView(view); refresh(); setupTimer(); fetchIndices(); loadStockList();
 </script>
 </body>
 </html>
