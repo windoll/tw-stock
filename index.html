@@ -140,10 +140,10 @@
       <span id="divStatus" class="code"></span>
     </div>
     <div class="note">
-      說明：來源為證交所「上市除權息預告表」，<b>含 ETF 與個股</b>，採<b>真正的除息交易日</b>，
+      說明：來源為 FinMind 股利資料，<b>含 ETF 與個股、有歷史</b>，採<b>真正的除息交易日</b>，
       區間內多次除息（月配／季配 ETF）會逐筆加總。
       「期間現金股利」＝每股現金股利 × 你輸入的股數（需先在「報價」頁填股數）。
-      註：此表為近期＋即將除息的滾動窗（約近兩個月起），更早的除息不在來源內；上櫃（OTC）亦不含。
+      註：FinMind 免費額度有每小時請求上限，若顯示達上限請稍後再按一次。
     </div>
     <div class="summary hidden" id="divSummary"></div>
     <div class="tablewrap">
@@ -229,7 +229,7 @@ function render(rows){
   if(rows) lastRows = rows;
   document.getElementById("empty").style.display = watch.length ? "none":"block";
   const byCode = {};
-  lastRows.forEach(m => { byCode[m.c] = m; });
+  lastRows.forEach(m => { byCode[m.c] = m; if(m.n) nameMap[m.c] = m.n; });
   if(view==="table") renderTable(byCode); else renderCards(byCode);
   renderSummary(byCode);
 }
@@ -396,42 +396,38 @@ function setupTimer(){
   if(s>0) timer = setInterval(refresh, s*1000);
 }
 
-// ───── 股利（手動同步，含 ETF＋個股，真正除息日）─────
-// 來源：上市除權息預告表（小檔、乾淨 JSON，一般 proxy 可抓）
-const DIV_URL = "https://openapi.twse.com.tw/v1/exchangeReport/TWT48U_ALL";
-let divData = {};   // code -> [{date:"2026/04/23", name, cash, type}]
-
-function rocSlash(s){ if(!s || s.length<6) return ""; const y=parseInt(s.slice(0,s.length-4),10)+1911; return y+"/"+s.slice(-4,-2)+"/"+s.slice(-2); }
-
-async function fetchJsonProxy(url){
-  const ctrl = new AbortController();
-  const t = setTimeout(()=>ctrl.abort(), 12000);
-  try{
-    return await Promise.any(PROXIES.map(async w => {
-      const r = await fetch(w(url), {cache:"no-store", signal:ctrl.signal});
-      if(!r.ok) throw new Error("HTTP "+r.status);
-      return await r.json();
-    }));
-  } finally { clearTimeout(t); ctrl.abort(); }
-}
+// ───── 股利（FinMind，含 ETF＋個股、有歷史、真正除息日，可指定區間）─────
+const FINMIND = "https://api.finmindtrade.com/api/v4/data";
+const DIV_FROM = "2023-01-01";   // 抓此日起的歷史，渲染時再依使用者區間篩選
+let divData = {};   // code -> [{ex, pay, cash}]
+let nameMap = {};   // code -> 名稱（取自報價）
 
 async function syncDividends(){
-  const codes = new Set(watch.map(w=>w.code));
   const st = document.getElementById("divStatus");
-  if(!codes.size){ st.textContent = "請先到「報價」頁加入股票"; return; }
+  if(!watch.length){ st.textContent = "請先到「報價」頁加入股票"; return; }
   st.textContent = "同步中…";
   try{
-    const arr = await fetchJsonProxy(DIV_URL);
-    const map = {};
-    arr.forEach(r => {
-      const code = r.Code; if(!codes.has(code)) return;
-      (map[code] = map[code] || []).push({ date: rocSlash(r.Date), name: r.Name, cash: num0(r.CashDividend), type: r.Exdividend });
-    });
+    const results = await Promise.all(watch.map(async w => {
+      const url = `${FINMIND}?dataset=TaiwanStockDividend&data_id=${encodeURIComponent(w.code)}&start_date=${DIV_FROM}`;
+      try{
+        const r = await fetch(url, {cache:"no-store"});
+        const j = await r.json();
+        if(j.msg && /limit/i.test(j.msg)) return [w.code, null, "FinMind 請求達上限"];
+        const rows = (j.data||[]).map(d => ({
+          ex:  d.CashExDividendTradingDate || d.date || "",
+          pay: d.CashDividendPaymentDate || "",
+          cash:(d.CashEarningsDistribution||0) + (d.CashStatutorySurplus||0)
+        })).filter(d => d.cash>0 && d.ex);
+        return [w.code, rows];
+      }catch(e){ return [w.code, null, e.message]; }
+    }));
+    const map={}; let err="";
+    results.forEach(([code, rows, e]) => { if(rows) map[code]=rows; else if(e) err=e; });
     divData = map;
     localStorage.setItem(LS_DIV, JSON.stringify(map));
-    st.textContent = "完成 " + new Date().toLocaleString("zh-TW");
+    st.textContent = (err ? err+"；" : "") + "完成 " + new Date().toLocaleString("zh-TW");
     renderDivPage();
-  }catch(e){ st.textContent = "同步失敗：" + e.message + "（proxy 忙線可再按一次）"; }
+  }catch(e){ st.textContent = "同步失敗：" + e.message; }
 }
 
 function renderDivPage(){
@@ -445,15 +441,15 @@ function renderDivPage(){
   empty.style.display="none";
   let total=0;
   body.innerHTML = watch.map(w => {
-    const list = divData[w.code] || [];
+    const list = divData[w.code];
     const qty = num0(w.qty);
-    if(!list.length) return `<tr><td class="name">${w.code}</td><td colspan="4" class="flat">查無（尚未同步，或不在預告窗／上櫃）</td></tr>`;
-    const name = list[0].name || "";
-    const inR = list.filter(d => { const iso=d.date.replace(/\//g,"-"); return iso && (!s||iso>=s) && (!e||iso<=e); });
+    const name = nameMap[w.code] || "";
+    if(!list) return `<tr><td class="name"><b>${name}</b> <span class="code">${w.code}</span></td><td colspan="4" class="flat">查無（尚未同步或無資料）</td></tr>`;
+    const inR = list.filter(d => d.ex && (!s||d.ex>=s) && (!e||d.ex<=e));
     const cashSum = inR.reduce((a,d)=>a+d.cash, 0);
     const received = cashSum * qty;
     if(received) total += received;
-    const dates = inR.length ? inR.map(d=>d.date).join("、") : "—";
+    const dates = inR.length ? inR.map(d=>d.ex).join("、") : "—";
     let recTxt;
     if(!inR.length) recTxt = '<span class="flat">區間內無除息</span>';
     else if(!qty) recTxt = '<span class="flat">未填股數</span>';
