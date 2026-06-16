@@ -129,11 +129,26 @@ function rocDate(s){        // 民國日期字串 1150311 -> 2026/03/11
 }
 function sumFields(row, keys){ return keys.reduce((a,k)=>a + (parseFloat(row[k])||0), 0); }
 
+// 先試直連，失敗（多為瀏覽器 CORS）再用 proxy 後援競速
+async function fetchJsonResilient(url){
+  try{
+    const r = await fetch(url, {cache:"no-store"});
+    if(r.ok) return await r.json();
+  }catch(e){ /* 改走 proxy */ }
+  const ctrl = new AbortController();
+  const t = setTimeout(()=>ctrl.abort(), 15000);
+  try{
+    return await Promise.any(PROXIES.map(async w => {
+      const r = await fetch(w(url), {cache:"no-store", signal:ctrl.signal});
+      if(!r.ok) throw new Error("HTTP "+r.status);
+      return await r.json();
+    }));
+  } finally { clearTimeout(t); ctrl.abort(); }
+}
+
 async function loadDividends(){
   try{
-    const r = await fetch(DIV_URL, {cache:"no-store"});
-    if(!r.ok) throw new Error("HTTP "+r.status);
-    const arr = await r.json();
+    const arr = await fetchJsonResilient(DIV_URL);
     const map = {};
     arr.forEach(row => {
       const code = row["公司代號"];
