@@ -12,7 +12,9 @@
   *{box-sizing:border-box}
   body{margin:0;font-family:-apple-system,"Segoe UI","Microsoft JhengHei",sans-serif;
     background:var(--bg);color:var(--txt);padding:20px;max-width:880px;margin:0 auto}
-  h1{font-size:20px;margin:0 0 4px}
+  h1{font-size:20px;margin:0}
+  .topbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+  .topright{display:flex;gap:8px;align-items:center}
   .meta{color:var(--sub);font-size:13px;margin-bottom:16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
   .bar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
   input,select,button{font-size:15px;padding:10px 12px;border-radius:8px;border:1px solid var(--line);
@@ -20,6 +22,7 @@
   input{flex:1;min-width:160px}
   button{cursor:pointer;background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
   button.ghost{background:var(--card);color:var(--txt);border-color:var(--line);font-weight:400}
+  #eyeBtn{padding:8px 12px}
   table{width:100%;border-collapse:collapse;font-size:14px}
   th,td{padding:10px 8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
   th{color:var(--sub);font-weight:500;font-size:12px}
@@ -31,12 +34,16 @@
   .empty{color:var(--sub);text-align:center;padding:40px 0}
   .dot{width:8px;height:8px;border-radius:50%;background:var(--down);display:inline-block}
   .err{color:var(--up);font-size:13px;margin-top:8px;min-height:18px}
+  .note{color:var(--sub);font-size:12px;margin:8px 0 16px;line-height:1.6}
 
-  /* 檢視切換 */
+  /* 切換鈕 */
   .toggle{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
   .toggle button{background:var(--card);color:var(--sub);border:none;border-radius:0;padding:6px 12px;font-weight:600;font-size:13px}
   .toggle button.on{background:var(--accent);color:#fff}
   .hidden{display:none!important}
+
+  /* 隱私：隱藏獲利資訊 */
+  body.hideprivate .priv{filter:blur(8px);user-select:none}
 
   /* 卡片模式 */
   #cards{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
@@ -60,122 +67,112 @@
     margin-bottom:14px;font-size:14px;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
   .summary .lbl{color:var(--sub)}
   .summary b{font-size:17px}
+  .daterow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+  .daterow input[type=date]{flex:none;min-width:0;width:auto}
+  .daterow label{color:var(--sub);font-size:13px}
 </style>
 </head>
 <body>
-  <h1>台股即時報價</h1>
-  <div class="meta">
-    <span><span class="dot" id="dot"></span> <span id="status">就緒</span></span>
-    <span>更新間隔
-      <select id="interval">
-        <option value="10">10 秒</option>
-        <option value="30">30 秒</option>
-        <option value="60" selected>60 秒</option>
-        <option value="0">不自動</option>
-      </select>
-    </span>
-    <button id="refreshBtn" class="ghost">立即更新</button>
-    <span class="toggle" id="viewToggle">
-      <button data-view="table" class="on">表格</button>
-      <button data-view="cards">卡片</button>
-    </span>
-    <span id="updated"></span>
+  <div class="topbar">
+    <h1>台股即時報價</h1>
+    <div class="topright">
+      <span class="toggle" id="pageTabs">
+        <button data-page="quotes" class="on">報價</button>
+        <button data-page="div">股利</button>
+      </span>
+      <button id="eyeBtn" class="ghost" title="隱藏／顯示獲利資訊">👁</button>
+    </div>
   </div>
 
-  <div class="bar">
-    <input id="codeInput" placeholder="股票代號，例：2330（上市）/ 6488（上櫃）" autocomplete="off">
-    <button id="addBtn">加入</button>
-  </div>
-  <div class="err" id="err"></div>
+  <!-- ───── 報價頁 ───── -->
+  <div id="page-quotes">
+    <div class="meta">
+      <span><span class="dot" id="dot"></span> <span id="status">就緒</span></span>
+      <span>更新間隔
+        <select id="interval">
+          <option value="10">10 秒</option>
+          <option value="30">30 秒</option>
+          <option value="60" selected>60 秒</option>
+          <option value="0">不自動</option>
+        </select>
+      </span>
+      <button id="refreshBtn" class="ghost">立即更新</button>
+      <span class="toggle" id="viewToggle">
+        <button data-view="table" class="on">表格</button>
+        <button data-view="cards">卡片</button>
+      </span>
+      <span id="updated"></span>
+    </div>
 
-  <div class="summary hidden" id="summary"></div>
+    <div class="bar">
+      <input id="codeInput" placeholder="股票代號，例：2330（上市）/ 6488（上櫃）" autocomplete="off">
+      <button id="addBtn">加入</button>
+    </div>
+    <div class="err" id="err"></div>
 
-  <div class="tablewrap">
-  <table id="tableView">
-    <thead>
-      <tr>
-        <th class="name">名稱</th>
-        <th>成交</th><th>漲跌</th><th>幅度</th>
-        <th>股數</th><th>買價</th><th>損益</th><th>報酬率</th>
-        <th class="name">股利（現金／股票）</th>
-        <th>開</th><th>高</th><th>低</th><th>昨收</th><th>量</th><th></th>
-      </tr>
-    </thead>
-    <tbody id="tbody"></tbody>
-  </table>
+    <div class="summary hidden" id="summary"></div>
+
+    <div class="tablewrap">
+    <table id="tableView">
+      <thead>
+        <tr>
+          <th class="name">名稱</th>
+          <th>成交</th><th>漲跌</th><th>幅度</th>
+          <th>股數</th><th>買價</th><th>損益</th><th>報酬率</th>
+          <th>開</th><th>高</th><th>低</th><th>昨收</th><th>量</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    </div>
+    <div id="cards" class="hidden"></div>
+    <div class="empty" id="empty">尚未加入任何股票，請於上方輸入代號。</div>
   </div>
-  <div id="cards" class="hidden"></div>
-  <div class="empty" id="empty">尚未加入任何股票，請於上方輸入代號。</div>
+
+  <!-- ───── 股利頁 ───── -->
+  <div id="page-div" class="hidden">
+    <div class="daterow">
+      <label>區間</label>
+      <input type="date" id="divStart">
+      <label>~</label>
+      <input type="date" id="divEnd">
+      <button id="syncBtn">同步股利</button>
+      <span id="divStatus" class="code"></span>
+    </div>
+    <div class="note">
+      說明：來源為證交所「上市除權息預告表」，<b>含 ETF 與個股</b>，採<b>真正的除息交易日</b>，
+      區間內多次除息（月配／季配 ETF）會逐筆加總。
+      「期間現金股利」＝每股現金股利 × 你輸入的股數（需先在「報價」頁填股數）。
+      註：此表為近期＋即將除息的滾動窗（約近兩個月起），更早的除息不在來源內；上櫃（OTC）亦不含。
+    </div>
+    <div class="summary hidden" id="divSummary"></div>
+    <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th class="name">名稱</th><th class="name">區間內除息日</th>
+          <th>現金/股(合計)</th><th>股數</th><th>期間現金股利</th>
+        </tr>
+      </thead>
+      <tbody id="divBody"></tbody>
+    </table>
+    </div>
+    <div class="empty" id="divEmpty">按「同步股利」抓取你清單內股票的股利資料。</div>
+  </div>
 
 <script>
 const LS_KEY = "tw_watchlist_v1";
 const LS_VIEW = "tw_view_v1";
-let watch = load();          // [{code}]
+const LS_PRIV = "tw_priv_v1";
+const LS_DIV = "tw_div_cache_v1";
+let watch = load();
 let view = localStorage.getItem(LS_VIEW) || "table";   // table | cards
 let timer = null;
 
 function load(){ try{ return JSON.parse(localStorage.getItem(LS_KEY))||[] }catch(e){ return [] } }
 function save(){ localStorage.setItem(LS_KEY, JSON.stringify(watch)); }
 
-// ── 股利資料（TWSE OpenAPI，支援 CORS 可直連；僅上市）──────────────
-// 註：此資料集只有「股利年度／董事會分派日」，無「除權息交易日」；上櫃不在內。
-let divMap = {};            // code -> {year, cash, stock, date}
-const DIV_URL = "https://openapi.twse.com.tw/v1/opendata/t187ap45_L";
-
-function rocDate(s){        // 民國日期字串 1150311 -> 2026/03/11
-  if(!s || s.length<6) return "";
-  const y = parseInt(s.slice(0, s.length-4),10) + 1911;
-  return `${y}/${s.slice(-4,-2)}/${s.slice(-2)}`;
-}
-function sumFields(row, keys){ return keys.reduce((a,k)=>a + (parseFloat(row[k])||0), 0); }
-
-// 先試直連，失敗（多為瀏覽器 CORS）再用 proxy 後援競速
-async function fetchJsonResilient(url){
-  try{
-    const r = await fetch(url, {cache:"no-store"});
-    if(r.ok) return await r.json();
-  }catch(e){ /* 改走 proxy */ }
-  const ctrl = new AbortController();
-  const t = setTimeout(()=>ctrl.abort(), 15000);
-  try{
-    return await Promise.any(PROXIES.map(async w => {
-      const r = await fetch(w(url), {cache:"no-store", signal:ctrl.signal});
-      if(!r.ok) throw new Error("HTTP "+r.status);
-      return await r.json();
-    }));
-  } finally { clearTimeout(t); ctrl.abort(); }
-}
-
-async function loadDividends(){
-  try{
-    const arr = await fetchJsonResilient(DIV_URL);
-    const map = {};
-    arr.forEach(row => {
-      const code = row["公司代號"];
-      if(!code) return;
-      const cash = sumFields(row, ["股東配發-盈餘分配之現金股利(元/股)","股東配發-法定盈餘公積發放之現金(元/股)","股東配發-資本公積發放之現金(元/股)"]);
-      const stock = sumFields(row, ["股東配發-盈餘轉增資配股(元/股)","股東配發-法定盈餘公積轉增資配股(元/股)","股東配發-資本公積轉增資配股(元/股)"]);
-      const date = row["董事會（擬議）股利分派日"] || row["股東會日期"] || "";
-      // 同代號可能多筆（季配等），保留分派日最新的一筆
-      const prev = map[code];
-      if(!prev || date > prev.rawDate){
-        map[code] = {year: row["股利年度"]||"", cash, stock, date: rocDate(date), rawDate: date};
-      }
-    });
-    divMap = map;
-    render();   // 股利到位後重繪
-  }catch(e){ /* 股利抓取失敗不影響報價 */ }
-}
-
-function divCell(code){
-  const d = divMap[code];
-  if(!d || (!d.cash && !d.stock)) return `<span class="flat">—</span>`;
-  const yr = d.year ? d.year+"年 " : "";
-  const sub = d.date ? `<div class="code">${yr}分派 ${d.date}</div>` : (yr?`<div class="code">${yr}</div>`:"");
-  return `現金 ${fmt(d.cash)}　股票 ${fmt(d.stock)}${sub}`;
-}
-
-// 經 CORS proxy 抓 TWSE 即時報價（純前端無法直連 mis.twse）
+// ───── 即時報價（經 CORS proxy，純前端無法直連 mis.twse）─────
 const PROXIES = [
   u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
   u => "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(u),
@@ -192,52 +189,40 @@ async function fetchVia(wrap, url, signal){
 
 async function fetchQuotes(codes){
   if(!codes.length) return [];
-  // 同時查上市與上櫃，存在者才會回傳
   const exch = codes.map(c => `tse_${c}.tw|otc_${c}.tw`).join("|");
   const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${exch}&json=1&delay=0&_=${Date.now()}`;
-  // 同時向所有 proxy 發出，誰先回來就用誰；8 秒逾時
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 8000);
   try{
     return await Promise.any(PROXIES.map(w => fetchVia(w, url, ctrl.signal)));
-  }catch(e){
-    throw new Error("來源逾時或無回應");
-  }finally{
-    clearTimeout(timer);
-    ctrl.abort();   // 取消其餘較慢的請求
-  }
+  }catch(e){ throw new Error("來源逾時或無回應"); }
+  finally{ clearTimeout(timer); ctrl.abort(); }
 }
 
 function num(v){ const n = parseFloat(v); return isNaN(n) ? null : n; }
+function num0(v){ const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 function pickPrice(m){
-  let p = num(m.z);                       // 成交價
-  if(p===null){ const a = (m.a||"").split("_")[0]; p = num(a); }   // 退而求其次：賣一
-  if(p===null){ const b = (m.b||"").split("_")[0]; p = num(b); }   // 買一
-  if(p===null) p = num(m.y);              // 昨收
+  let p = num(m.z);
+  if(p===null){ const a = (m.a||"").split("_")[0]; p = num(a); }
+  if(p===null){ const b = (m.b||"").split("_")[0]; p = num(b); }
+  if(p===null) p = num(m.y);
   return p;
 }
 function fmt(n,d=2){ return n===null||n===undefined ? "—" : Number(n).toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d}); }
-
-let lastRows = [];   // 暫存最後一次抓到的資料，供切換檢視/排序後重繪
-
 function clsOf(v){ return v===null||v===0 ? "flat" : (v>0?"up":"down"); }
 function signOf(v){ return v>0?"▲":(v<0?"▼":""); }
+
+let lastRows = [];
 
 function calc(m, w){
   const price = pickPrice(m);
   const y = num(m.y);
   const diff = (price!==null && y!==null) ? price - y : null;
   const pct  = (diff!==null && y) ? diff / y * 100 : null;
-  // 持股損益
   const qty = w && num(w.qty), cost = w && num(w.cost);
   let pl=null, plPct=null, hasHold=false;
-  if(qty && cost && price!==null){
-    hasHold = true;
-    pl = (price - cost) * qty;
-    plPct = (price - cost) / cost * 100;
-  }
-  return {price, y, diff, pct, cls:clsOf(diff), sign:signOf(diff),
-          vol:num(m.v), qty, cost, pl, plPct, hasHold};
+  if(qty && cost && price!==null){ hasHold=true; pl=(price-cost)*qty; plPct=(price-cost)/cost*100; }
+  return {price, y, diff, pct, cls:clsOf(diff), sign:signOf(diff), vol:num(m.v), qty, cost, pl, plPct, hasHold};
 }
 
 function render(rows){
@@ -263,15 +248,14 @@ function renderSummary(byCode){
   const plPct = totalCost ? pl/totalCost*100 : null;
   const cls = clsOf(pl);
   box.innerHTML = `
-    <span><span class="lbl">總成本</span> ${fmt(totalCost,0)}</span>
-    <span><span class="lbl">總市值</span> ${fmt(totalVal,0)}</span>
-    <span><span class="lbl">總損益</span> <b class="${cls}">${signOf(pl)} ${fmt(Math.abs(pl),0)}</b>
-      <span class="${cls}">(${plPct===null?"—":signOf(pl)+fmt(Math.abs(plPct))+"%"})</span></span>`;
+    <span><span class="lbl">總成本</span> <span class="priv">${fmt(totalCost,0)}</span></span>
+    <span><span class="lbl">總市值</span> <span class="priv">${fmt(totalVal,0)}</span></span>
+    <span><span class="lbl">總損益</span> <b class="priv ${cls}">${signOf(pl)} ${fmt(Math.abs(pl),0)}</b>
+      <span class="priv ${cls}">(${plPct===null?"—":signOf(pl)+fmt(Math.abs(plPct))+"%"})</span></span>`;
 }
 
 function renderTable(byCode){
   const tb = document.getElementById("tbody");
-  // 正在編輯持股欄位時不重建，避免打字被自動更新打斷
   if(document.activeElement && document.activeElement.classList.contains("hold")) return;
   tb.innerHTML = watch.map(w => {
     const m = byCode[w.code];
@@ -284,7 +268,6 @@ function renderTable(byCode){
       <td class="name">⠿ ${w.code} <span class="code">查無資料</span></td>
       <td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
       ${holdCells}<td class="flat">—</td><td class="flat">—</td>
-      <td class="name">${divCell(w.code)}</td>
       <td class="flat">—</td><td class="flat">—</td><td class="flat">—</td><td class="flat">—</td><td class="flat">—</td>
       <td><button class="del" data-code="${w.code}">✕</button></td></tr>`;
     const d = calc(m, w);
@@ -294,9 +277,8 @@ function renderTable(byCode){
       <td class="${d.cls}">${d.sign} ${d.diff===null?"—":fmt(Math.abs(d.diff))}</td>
       <td class="${d.cls}">${d.pct===null?"—":fmt(Math.abs(d.pct))+"%"}</td>
       ${holdCells}
-      <td class="${d.hasHold?clsOf(d.pl):'flat'}">${d.hasHold?signOf(d.pl)+" "+fmt(Math.abs(d.pl),0):"—"}</td>
-      <td class="${d.hasHold?clsOf(d.pl):'flat'}">${d.hasHold?signOf(d.pl)+fmt(Math.abs(d.plPct))+"%":"—"}</td>
-      <td class="name">${divCell(m.c)}</td>
+      <td class="priv ${d.hasHold?clsOf(d.pl):'flat'}">${d.hasHold?signOf(d.pl)+" "+fmt(Math.abs(d.pl),0):"—"}</td>
+      <td class="priv ${d.hasHold?clsOf(d.pl):'flat'}">${d.hasHold?signOf(d.pl)+fmt(Math.abs(d.plPct))+"%":"—"}</td>
       <td>${fmt(num(m.o))}</td><td>${fmt(num(m.h))}</td><td>${fmt(num(m.l))}</td>
       <td>${fmt(d.y)}</td><td>${d.vol===null?"—":d.vol.toLocaleString()}</td>
       <td><button class="del" data-code="${m.c}">✕</button></td>
@@ -328,12 +310,7 @@ function renderCards(byCode){
     const d = calc(m, w);
     const hold = d.hasHold ? `<div class="chold">
         <span class="lbl">持有 ${d.qty.toLocaleString()} 股 @ ${fmt(d.cost)}</span>
-        <span class="${clsOf(d.pl)}">${signOf(d.pl)} ${fmt(Math.abs(d.pl),0)} (${signOf(d.pl)}${fmt(Math.abs(d.plPct))}%)</span>
-      </div>` : "";
-    const dv = divMap[m.c];
-    const divLine = (dv && (dv.cash||dv.stock)) ? `<div class="chold">
-        <span class="lbl">股利${dv.year?" "+dv.year+"年":""}</span>
-        <span>現金 ${fmt(dv.cash)}　股票 ${fmt(dv.stock)}</span>
+        <span class="priv ${clsOf(d.pl)}">${signOf(d.pl)} ${fmt(Math.abs(d.pl),0)} (${signOf(d.pl)}${fmt(Math.abs(d.plPct))}%)</span>
       </div>` : "";
     return `<div class="card ${d.cls}" draggable="true" data-code="${m.c}">
       <button class="cdel" data-code="${m.c}">✕</button>
@@ -342,24 +319,24 @@ function renderCards(byCode){
       <div class="crow ${d.cls}">
         <span>${d.sign} ${d.diff===null?"—":fmt(Math.abs(d.diff))}</span>
         <span>${d.pct===null?"—":fmt(Math.abs(d.pct))+"%"}</span>
-      </div>${hold}${divLine}</div>`;
+      </div>${hold}</div>`;
   }).join("");
   wrap.querySelectorAll(".cdel").forEach(b => b.onclick = () => removeCode(b.dataset.code));
   enableDrag(wrap, ".card");
 }
 
-// 拖曳排序：適用表格列與卡片
+// 拖曳排序
 let dragCode = null;
 function enableDrag(container, sel){
   container.querySelectorAll(sel).forEach(el => {
     el.style.cursor = "grab";
     el.ondragstart = e => {
-      if(e.target.classList && e.target.classList.contains("hold")){ e.preventDefault(); return; } // 編輯持股時不啟動拖曳
+      if(e.target.classList && e.target.classList.contains("hold")){ e.preventDefault(); return; }
       dragCode = el.dataset.code; e.dataTransfer.effectAllowed="move"; el.style.opacity=".4";
     };
-    el.ondragend   = () => { el.style.opacity="1"; dragCode=null; };
-    el.ondragover  = e => { e.preventDefault(); };
-    el.ondrop      = e => {
+    el.ondragend = () => { el.style.opacity="1"; dragCode=null; };
+    el.ondragover = e => { e.preventDefault(); };
+    el.ondrop = e => {
       e.preventDefault();
       const target = el.dataset.code;
       if(!dragCode || dragCode===target) return;
@@ -392,7 +369,7 @@ async function refresh(){
     document.getElementById("err").textContent = "";
     setStatus("已連線", false);
   }catch(e){
-    document.getElementById("err").textContent = "更新失敗：" + e.message + "（proxy 或來源暫時無法存取，稍後重試）";
+    document.getElementById("err").textContent = "更新失敗：" + e.message + "（proxy 暫時無法存取，稍後重試）";
     setStatus("連線異常", false);
   }
 }
@@ -409,10 +386,9 @@ function addCode(){
   if(!/^[0-9A-Z]{3,6}$/.test(code)){ document.getElementById("err").textContent="代號格式不正確"; return; }
   if(watch.some(w=>w.code===code)){ document.getElementById("err").textContent="已在清單中"; inp.value=""; return; }
   watch.push({code}); save(); inp.value="";
-  render();        // 先立即顯示（此時報價欄為「—」），讓使用者確認已加入
-  refresh();       // 再向伺服器抓最新報價填入
+  render(); refresh();
 }
-function removeCode(code){ watch = watch.filter(w=>w.code!==code); save(); refresh(); }
+function removeCode(code){ watch = watch.filter(w=>w.code!==code); save(); render(); refresh(); }
 
 function setupTimer(){
   if(timer) clearInterval(timer);
@@ -420,13 +396,119 @@ function setupTimer(){
   if(s>0) timer = setInterval(refresh, s*1000);
 }
 
+// ───── 股利（手動同步，含 ETF＋個股，真正除息日）─────
+// 來源：上市除權息預告表（小檔、乾淨 JSON，一般 proxy 可抓）
+const DIV_URL = "https://openapi.twse.com.tw/v1/exchangeReport/TWT48U_ALL";
+let divData = {};   // code -> [{date:"2026/04/23", name, cash, type}]
+
+function rocSlash(s){ if(!s || s.length<6) return ""; const y=parseInt(s.slice(0,s.length-4),10)+1911; return y+"/"+s.slice(-4,-2)+"/"+s.slice(-2); }
+
+async function fetchJsonProxy(url){
+  const ctrl = new AbortController();
+  const t = setTimeout(()=>ctrl.abort(), 12000);
+  try{
+    return await Promise.any(PROXIES.map(async w => {
+      const r = await fetch(w(url), {cache:"no-store", signal:ctrl.signal});
+      if(!r.ok) throw new Error("HTTP "+r.status);
+      return await r.json();
+    }));
+  } finally { clearTimeout(t); ctrl.abort(); }
+}
+
+async function syncDividends(){
+  const codes = new Set(watch.map(w=>w.code));
+  const st = document.getElementById("divStatus");
+  if(!codes.size){ st.textContent = "請先到「報價」頁加入股票"; return; }
+  st.textContent = "同步中…";
+  try{
+    const arr = await fetchJsonProxy(DIV_URL);
+    const map = {};
+    arr.forEach(r => {
+      const code = r.Code; if(!codes.has(code)) return;
+      (map[code] = map[code] || []).push({ date: rocSlash(r.Date), name: r.Name, cash: num0(r.CashDividend), type: r.Exdividend });
+    });
+    divData = map;
+    localStorage.setItem(LS_DIV, JSON.stringify(map));
+    st.textContent = "完成 " + new Date().toLocaleString("zh-TW");
+    renderDivPage();
+  }catch(e){ st.textContent = "同步失敗：" + e.message + "（proxy 忙線可再按一次）"; }
+}
+
+function renderDivPage(){
+  const s = document.getElementById("divStart").value;
+  const e = document.getElementById("divEnd").value;
+  const body = document.getElementById("divBody");
+  const empty = document.getElementById("divEmpty");
+  const sum = document.getElementById("divSummary");
+  if(!watch.length){ empty.textContent="請先到「報價」頁加入股票"; empty.style.display="block"; body.innerHTML=""; sum.classList.add("hidden"); return; }
+  if(!Object.keys(divData).length){ empty.textContent='按「同步股利」抓取你清單內股票的股利資料。'; empty.style.display="block"; body.innerHTML=""; sum.classList.add("hidden"); return; }
+  empty.style.display="none";
+  let total=0;
+  body.innerHTML = watch.map(w => {
+    const list = divData[w.code] || [];
+    const qty = num0(w.qty);
+    if(!list.length) return `<tr><td class="name">${w.code}</td><td colspan="4" class="flat">查無（尚未同步，或不在預告窗／上櫃）</td></tr>`;
+    const name = list[0].name || "";
+    const inR = list.filter(d => { const iso=d.date.replace(/\//g,"-"); return iso && (!s||iso>=s) && (!e||iso<=e); });
+    const cashSum = inR.reduce((a,d)=>a+d.cash, 0);
+    const received = cashSum * qty;
+    if(received) total += received;
+    const dates = inR.length ? inR.map(d=>d.date).join("、") : "—";
+    let recTxt;
+    if(!inR.length) recTxt = '<span class="flat">區間內無除息</span>';
+    else if(!qty) recTxt = '<span class="flat">未填股數</span>';
+    else recTxt = `<span class="priv up">${fmt(received,0)}</span>`;
+    return `<tr>
+      <td class="name"><b>${name}</b> <span class="code">${w.code}</span></td>
+      <td class="name code">${dates}</td>
+      <td>${inR.length?fmt(cashSum):"—"}</td>
+      <td>${qty?qty.toLocaleString():"—"}</td>
+      <td>${recTxt}</td>
+    </tr>`;
+  }).join("");
+  sum.classList.remove("hidden");
+  sum.innerHTML = `<span class="lbl">區間 ${s||"—"} ~ ${e||"—"}（依除息日）</span>
+    <span><span class="lbl">期間現金股利合計</span> <b class="priv up">${fmt(total,0)}</b></span>`;
+}
+
+function setPage(p){
+  document.getElementById("page-quotes").classList.toggle("hidden", p!=="quotes");
+  document.getElementById("page-div").classList.toggle("hidden", p!=="div");
+  document.querySelectorAll("#pageTabs button").forEach(b => b.classList.toggle("on", b.dataset.page===p));
+  if(p==="div") renderDivPage();
+}
+
+function setPrivacy(on){
+  document.body.classList.toggle("hideprivate", on);
+  localStorage.setItem(LS_PRIV, on?"1":"0");
+  document.getElementById("eyeBtn").textContent = on ? "🙈" : "👁";
+}
+
+// ───── 事件與初始化 ─────
 document.getElementById("addBtn").onclick = addCode;
 document.getElementById("refreshBtn").onclick = refresh;
 document.getElementById("codeInput").addEventListener("keydown", e => { if(e.key==="Enter") addCode(); });
 document.getElementById("interval").addEventListener("change", setupTimer);
 document.querySelectorAll("#viewToggle button").forEach(b => b.onclick = () => setView(b.dataset.view));
+document.querySelectorAll("#pageTabs button").forEach(b => b.onclick = () => setPage(b.dataset.page));
+document.getElementById("syncBtn").onclick = syncDividends;
+document.getElementById("divStart").addEventListener("change", renderDivPage);
+document.getElementById("divEnd").addEventListener("change", renderDivPage);
+document.getElementById("eyeBtn").onclick = () => setPrivacy(!document.body.classList.contains("hideprivate"));
 
-setView(view); refresh(); setupTimer(); loadDividends();
+// 日期預設：2026/01/01 ~ 今天（每次開啟取當天）
+(function initDates(){
+  const today = new Date();
+  const iso = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0")+"-"+String(today.getDate()).padStart(2,"0");
+  document.getElementById("divStart").value = "2026-01-01";
+  document.getElementById("divEnd").value = iso;
+})();
+
+// 還原上次同步的股利快取
+try{ divData = JSON.parse(localStorage.getItem(LS_DIV)) || {}; }catch(e){ divData = {}; }
+
+setPrivacy(localStorage.getItem(LS_PRIV)==="1");
+setView(view); refresh(); setupTimer();
 </script>
 </body>
 </html>
